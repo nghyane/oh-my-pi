@@ -1,6 +1,7 @@
 import { $env, logger, Snowflake } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 import { Settings } from "../config/settings";
+import { time } from "../utils/timings";
 import { htmlToBasicMarkdown } from "../web/scrapers/types";
 import { acquireSharedGateway, releaseSharedGateway, shutdownSharedGateway } from "./gateway-coordinator";
 import { loadPythonModules } from "./modules";
@@ -331,9 +332,8 @@ export class PythonKernel {
 	}
 
 	static async start(options: KernelStartOptions): Promise<PythonKernel> {
-		const availability = await logger.timeAsync("PythonKernel.start:availabilityCheck", () =>
-			checkPythonKernelAvailability(options.cwd),
-		);
+		const availability = await checkPythonKernelAvailability(options.cwd);
+		time("PythonKernel.start:availabilityCheck");
 		if (!availability.ok) {
 			throw new Error(availability.reason ?? "Python kernel unavailable");
 		}
@@ -349,15 +349,13 @@ export class PythonKernel {
 
 		for (let attempt = 0; attempt < 2; attempt += 1) {
 			try {
-				const sharedResult = await logger.timeAsync("PythonKernel.start:acquireSharedGateway", () =>
-					acquireSharedGateway(options.cwd),
-				);
+				const sharedResult = await acquireSharedGateway(options.cwd);
+				time("PythonKernel.start:acquireSharedGateway");
 				if (!sharedResult) {
 					throw new Error("Shared Python gateway unavailable");
 				}
-				const kernel = await logger.timeAsync("PythonKernel.start:startWithSharedGateway", () =>
-					PythonKernel.#startWithSharedGateway(sharedResult.url, options.cwd, options.env),
-				);
+				const kernel = await PythonKernel.#startWithSharedGateway(sharedResult.url, options.cwd, options.env);
+				time("PythonKernel.start:startWithSharedGateway");
 				return kernel;
 			} catch (err) {
 				logger.debug("PythonKernel.start:sharedFailed");
@@ -430,13 +428,12 @@ export class PythonKernel {
 		cwd: string,
 		env?: Record<string, string | undefined>,
 	): Promise<PythonKernel> {
-		const createResponse = await logger.timeAsync("startWithSharedGateway:createKernel", () =>
-			fetch(`${gatewayUrl}/api/kernels`, {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ name: "python3" }),
-			}),
-		);
+		const createResponse = await fetch(`${gatewayUrl}/api/kernels`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ name: "python3" }),
+		});
+		time("startWithSharedGateway:createKernel");
 
 		if (!createResponse.ok) {
 			logger.debug(`sharedGateway:fetch:notOk:${createResponse.status}`);
@@ -448,24 +445,24 @@ export class PythonKernel {
 			);
 		}
 
-		const kernelInfo = await logger.timeAsync(
-			"startWithSharedGateway:parseJson",
-			() => createResponse.json() as Promise<{ id: string }>,
-		);
+		const kernelInfo = (await createResponse.json()) as { id: string };
+		time("startWithSharedGateway:parseJson");
 		const kernelId = kernelInfo.id;
 
 		const kernel = new PythonKernel(Snowflake.next(), kernelId, gatewayUrl, Snowflake.next(), "omp", true);
 
 		try {
-			await logger.timeAsync("startWithSharedGateway:connectWS", () => kernel.#connectWebSocket());
-			await logger.timeAsync("startWithSharedGateway:initEnv", () => kernel.#initializeKernelEnvironment(cwd, env));
-			const preludeResult = await logger.timeAsync("startWithSharedGateway:prelude", () =>
-				kernel.execute(PYTHON_PRELUDE, { silent: true, storeHistory: false }),
-			);
+			await kernel.#connectWebSocket();
+			time("startWithSharedGateway:connectWS");
+			await kernel.#initializeKernelEnvironment(cwd, env);
+			time("startWithSharedGateway:initEnv");
+			const preludeResult = await kernel.execute(PYTHON_PRELUDE, { silent: true, storeHistory: false });
+			time("startWithSharedGateway:prelude");
 			if (preludeResult.cancelled || preludeResult.status === "error") {
 				throw new Error("Failed to initialize Python kernel prelude");
 			}
-			await logger.timeAsync("startWithSharedGateway:loadModules", () => loadPythonModules(kernel, { cwd }));
+			await loadPythonModules(kernel, { cwd });
+			time("startWithSharedGateway:loadModules");
 			return kernel;
 		} catch (err: unknown) {
 			await kernel.shutdown();

@@ -19,7 +19,7 @@ Subagents CAN grep the parent conversation file for supplementary details.
 
 ### `agent` (required)
 
-Agent type for all tasks in this batch.
+Agent type for all tasks in this batch. Must match one of the agent names listed in the **Agents** section below. Using an unlisted name will fail.
 
 ### `context` (optional — strongly recommended)
 

@@ -82,6 +82,10 @@ import {
 import { ToolContextStore } from "./tools/context";
 import { getGeminiImageTools } from "./tools/gemini-image";
 import { EventBus } from "./utils/event-bus";
+import { time } from "./utils/timings";
+
+/** Conditional startup debug prints (stderr) when PI_DEBUG_STARTUP is set */
+const debugStartup = $env.PI_DEBUG_STARTUP ? (stage: string) => process.stderr.write(`[startup] ${stage}\n`) : () => {};
 
 // Types
 export interface CreateAgentSessionOptions {
@@ -535,6 +539,7 @@ function createCustomToolsExtension(tools: CustomTool[]): ExtensionFactory {
  * ```
  */
 export async function createAgentSession(options: CreateAgentSessionOptions = {}): Promise<CreateAgentSessionResult> {
+	debugStartup("sdk:createAgentSession:entry");
 	const cwd = options.cwd ?? getProjectDir();
 	const agentDir = options.agentDir ?? getDefaultAgentDir();
 	const eventBus = options.eventBus ?? new EventBus();
@@ -543,20 +548,17 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	registerPythonCleanup();
 
 	// Use provided or create AuthStorage and ModelRegistry
-	const { authStorage, modelRegistry } = await logger.timeAsync("discoverModels", async () => {
-		const authStorage = options.authStorage ?? (await discoverAuthStorage(agentDir));
-		const modelRegistry = options.modelRegistry ?? new ModelRegistry(authStorage);
-		if (!options.modelRegistry) {
-			await modelRegistry.refresh();
-		}
-		return { authStorage, modelRegistry };
-	});
+	const authStorage = options.authStorage ?? (await discoverAuthStorage(agentDir));
+	const modelRegistry = options.modelRegistry ?? new ModelRegistry(authStorage);
+	if (!options.modelRegistry) {
+		await modelRegistry.refresh();
+	}
+	time("discoverModels");
 
-	const settings = await logger.timeAsync(
-		"settings",
-		async () => options.settings ?? (await Settings.init({ cwd, agentDir })),
-	);
-	logger.time("initializeWithSettings", initializeWithSettings, settings);
+	const settings = options.settings ?? (await Settings.init({ cwd, agentDir }));
+	time("settings");
+	initializeWithSettings(settings);
+	time("initializeWithSettings");
 	const skillsSettings = settings.getGroup("skills") as SkillsSettings;
 	const discoveredSkillsPromise =
 		options.skills === undefined ? discoverSkills(cwd, agentDir, skillsSettings) : undefined;
@@ -565,7 +567,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	setPreferredSearchProvider(settings.get("providers.webSearch") ?? "auto");
 	setPreferredImageProvider(settings.get("providers.image") ?? "auto");
 
-	const sessionManager = options.sessionManager ?? logger.time("sessionManager", SessionManager.create, cwd);
+	const sessionManager = options.sessionManager ?? SessionManager.create(cwd);
+	time("sessionManager");
 	const sessionId = sessionManager.getSessionId();
 	const modelApiKeyAvailability = new Map<string, boolean>();
 	const getModelAvailabilityKey = (candidate: Model): string =>
@@ -583,7 +586,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	};
 
 	// Check if session has existing data to restore
-	const existingSession = logger.time("loadSession", () => sessionManager.buildSessionContext());
+	const existingSession = sessionManager.buildSessionContext();
+	time("loadSession");
 	const hasExistingSession = existingSession.messages.length > 0;
 	const hasThinkingEntry = sessionManager.getBranch().some(entry => entry.type === "thinking_level_change");
 
@@ -662,52 +666,43 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		skills = options.skills;
 		skillWarnings = [];
 	} else {
-		const discovered = await logger.timeAsync("discoverSkills", async () =>
-			discoveredSkillsPromise ? await discoveredSkillsPromise : { skills: [], warnings: [] },
-		);
+		const discovered = discoveredSkillsPromise ? await discoveredSkillsPromise : { skills: [], warnings: [] };
+		time("discoverSkills");
 		skills = discovered.skills;
 		skillWarnings = discovered.warnings;
 	}
 
 	// Discover rules
-	const { ttsrManager, rulesResult, registeredTtsrRuleNames } = await logger.timeAsync(
-		"discoverTtsrRules",
-		async () => {
-			const ttsrSettings = settings.getGroup("ttsr");
-			const ttsrManager = new TtsrManager(ttsrSettings);
-			const rulesResult =
-				options.rules !== undefined
-					? { items: options.rules, warnings: undefined }
-					: await loadCapability<Rule>(ruleCapability.id, { cwd });
-			const registeredTtsrRuleNames = new Set<string>();
-			for (const rule of rulesResult.items) {
-				if (rule.condition && rule.condition.length > 0) {
-					if (ttsrManager.addRule(rule)) {
-						registeredTtsrRuleNames.add(rule.name);
-					}
-				}
+	const ttsrSettings = settings.getGroup("ttsr");
+	const ttsrManager = new TtsrManager(ttsrSettings);
+	const rulesResult =
+		options.rules !== undefined
+			? { items: options.rules, warnings: undefined }
+			: await loadCapability<Rule>(ruleCapability.id, { cwd });
+	const registeredTtsrRuleNames = new Set<string>();
+	for (const rule of rulesResult.items) {
+		if (rule.condition && rule.condition.length > 0) {
+			if (ttsrManager.addRule(rule)) {
+				registeredTtsrRuleNames.add(rule.name);
 			}
-			if (existingSession.injectedTtsrRules.length > 0) {
-				ttsrManager.restoreInjected(existingSession.injectedTtsrRules);
-			}
-			return { ttsrManager, rulesResult, registeredTtsrRuleNames };
-		},
-	);
+		}
+	}
+	if (existingSession.injectedTtsrRules.length > 0) {
+		ttsrManager.restoreInjected(existingSession.injectedTtsrRules);
+	}
+	time("discoverTtsrRules");
 
 	// Filter rules for the rulebook (non-TTSR, non-alwaysApply, with descriptions)
-	const rulebookRules = logger.time("filterRulebookRules", () =>
-		rulesResult.items.filter((rule: Rule) => {
-			if (registeredTtsrRuleNames.has(rule.name)) return false;
-			if (rule.alwaysApply) return false;
-			if (!rule.description) return false;
-			return true;
-		}),
-	);
+	const rulebookRules = rulesResult.items.filter((rule: Rule) => {
+		if (registeredTtsrRuleNames.has(rule.name)) return false;
+		if (rule.alwaysApply) return false;
+		if (!rule.description) return false;
+		return true;
+	});
+	time("filterRulebookRules");
 
-	const contextFiles = await logger.timeAsync(
-		"discoverContextFiles",
-		async () => options.contextFiles ?? (await discoverContextFiles(cwd, agentDir)),
-	);
+	const contextFiles = options.contextFiles ?? (await discoverContextFiles(cwd, agentDir));
+	time("discoverContextFiles");
 
 	let agent: Agent;
 	let session: AgentSession;
@@ -777,29 +772,29 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	);
 
 	// Create built-in tools (already wrapped with meta notice formatting)
-	const builtinTools = await logger.timeAsync("createAllTools", () => createTools(toolSession, options.toolNames));
+	const builtinTools = await createTools(toolSession, options.toolNames);
+	time("createAllTools");
 
 	// Discover MCP tools from .mcp.json files
 	let mcpManager: MCPManager | undefined;
 	const enableMCP = options.enableMCP ?? true;
 	const customTools: CustomTool[] = [];
 	if (enableMCP) {
-		const mcpResult = await logger.timeAsync("discoverAndLoadMCPTools", () =>
-			discoverAndLoadMCPTools(cwd, {
-				onConnecting: serverNames => {
-					if (options.hasUI && serverNames.length > 0) {
-						process.stderr.write(`${chalk.gray(`Connecting to MCP servers: ${serverNames.join(", ")}…`)}\n`);
-					}
-				},
-				enableProjectConfig: settings.get("mcp.enableProjectConfig") ?? true,
-				// Always filter Exa - we have native integration
-				filterExa: true,
-				// Filter browser MCP servers when builtin browser tool is active
-				filterBrowser: (settings.get("browser.enabled") as boolean) ?? false,
-				cacheStorage: settings.getStorage(),
-				authStorage,
-			}),
-		);
+		const mcpResult = await discoverAndLoadMCPTools(cwd, {
+			onConnecting: serverNames => {
+				if (options.hasUI && serverNames.length > 0) {
+					process.stderr.write(`${chalk.gray(`Connecting to MCP servers: ${serverNames.join(", ")}…`)}\n`);
+				}
+			},
+			enableProjectConfig: settings.get("mcp.enableProjectConfig") ?? true,
+			// Always filter Exa - we have native integration
+			filterExa: true,
+			// Filter browser MCP servers when builtin browser tool is active
+			filterBrowser: (settings.get("browser.enabled") as boolean) ?? false,
+			cacheStorage: settings.getStorage(),
+			authStorage,
+		});
+		time("discoverAndLoadMCPTools");
 		mcpManager = mcpResult.manager;
 		toolSession.mcpManager = mcpManager;
 
@@ -820,7 +815,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	}
 
 	// Add Gemini image tools if GEMINI_API_KEY (or GOOGLE_API_KEY) is available
-	const geminiImageTools = await logger.timeAsync("getGeminiImageTools", getGeminiImageTools);
+	const geminiImageTools = await getGeminiImageTools();
+	time("getGeminiImageTools");
 	if (geminiImageTools.length > 0) {
 		customTools.push(...(geminiImageTools as unknown as CustomTool[]));
 	}
@@ -828,10 +824,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	// Add specialized Exa web search tools if EXA_API_KEY is available
 	const exaSettings = settings.getGroup("exa");
 	if (exaSettings.enabled && exaSettings.enableSearch) {
-		const exaSearchTools = await logger.timeAsync("getSearchTools", getSearchTools, {
+		const exaSearchTools = await getSearchTools({
 			enableLinkedin: exaSettings.enableLinkedin as boolean,
 			enableCompany: exaSettings.enableCompany as boolean,
 		});
+		time("getSearchTools");
 		// Filter out the base web_search (already in built-in tools), add specialized Exa tools
 		const specializedTools = exaSearchTools.filter(t => t.name !== "web_search");
 		if (specializedTools.length > 0) {
@@ -841,13 +838,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 	// Discover and load custom tools from .omp/tools/, .claude/tools/, etc.
 	const builtInToolNames = builtinTools.map(t => t.name);
-	const discoveredCustomTools = await logger.timeAsync(
-		"discoverAndLoadCustomTools",
-		discoverAndLoadCustomTools,
-		[],
-		cwd,
-		builtInToolNames,
-	);
+	const discoveredCustomTools = await discoverAndLoadCustomTools([], cwd, builtInToolNames);
+	time("discoverAndLoadCustomTools");
 	for (const { path, error } of discoveredCustomTools.errors) {
 		logger.error("Custom tool load failed", { path, error });
 	}
@@ -864,7 +856,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	let extensionsResult: LoadExtensionsResult;
 	if (options.disableExtensionDiscovery) {
 		const configuredPaths = options.additionalExtensionPaths ?? [];
-		extensionsResult = await logger.timeAsync("loadExtensions", loadExtensions, configuredPaths, cwd, eventBus);
+		extensionsResult = await loadExtensions(configuredPaths, cwd, eventBus);
+		time("loadExtensions");
 		for (const { path, error } of extensionsResult.errors) {
 			logger.error("Failed to load extension", { path, error });
 		}
@@ -876,13 +869,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			...(options.additionalExtensionPaths ?? []),
 			...((settings.get("extensions") as string[]) ?? []),
 		];
-		extensionsResult = await logger.timeAsync(
-			"discoverAndLoadExtensions",
-			discoverAndLoadExtensions,
-			configuredPaths,
-			cwd,
-			eventBus,
-		);
+		extensionsResult = await discoverAndLoadExtensions(configuredPaths, cwd, eventBus);
+		time("discoverAndLoadExtensions");
 		for (const { path, error } of extensionsResult.errors) {
 			logger.error("Failed to load extension", { path, error });
 		}
@@ -956,7 +944,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	// Discover custom commands (TypeScript slash commands)
 	const customCommandsResult: CustomCommandsLoadResult = options.disableExtensionDiscovery
 		? { commands: [], errors: [] }
-		: await logger.timeAsync("discoverCustomCommands", loadCustomCommandsInternal, { cwd, agentDir });
+		: await loadCustomCommandsInternal({ cwd, agentDir });
+	time("discoverCustomCommands");
 	if (!options.disableExtensionDiscovery) {
 		for (const { path, error } of customCommandsResult.errors) {
 			logger.error("Failed to load custom command", { path, error });
@@ -1094,20 +1083,15 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		}
 	}
 
-	const systemPrompt = await logger.timeAsync(
-		"buildSystemPrompt",
-		rebuildSystemPrompt,
-		initialToolNames,
-		toolRegistry,
-	);
+	const systemPrompt = await rebuildSystemPrompt(initialToolNames, toolRegistry);
+	time("buildSystemPrompt");
 
-	const promptTemplates =
-		options.promptTemplates ??
-		(await logger.timeAsync("discoverPromptTemplates", discoverPromptTemplates, cwd, agentDir));
+	const promptTemplates = options.promptTemplates ?? (await discoverPromptTemplates(cwd, agentDir));
+	time("discoverPromptTemplates");
 	toolSession.promptTemplates = promptTemplates;
 
-	const slashCommands =
-		options.slashCommands ?? (await logger.timeAsync("discoverSlashCommands", discoverSlashCommands, cwd));
+	const slashCommands = options.slashCommands ?? (await discoverSlashCommands(cwd));
+	time("discoverSlashCommands");
 
 	// Create convertToLlm wrapper that filters images if blockImages is enabled (defense-in-depth)
 	const convertToLlmWithBlockImages = (messages: AgentMessage[]): Message[] => {
@@ -1147,7 +1131,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	// Load and create secret obfuscator if secrets are enabled
 	let obfuscator: SecretObfuscator | undefined;
 	if (settings.get("secrets.enabled")) {
-		const fileEntries = await logger.timeAsync("loadSecrets", loadSecrets, cwd, agentDir);
+		const fileEntries = await loadSecrets(cwd, agentDir);
+		time("loadSecrets");
 		const envEntries = collectEnvSecrets();
 		const allEntries = [...envEntries, ...fileEntries];
 		if (allEntries.length > 0) {
@@ -1247,12 +1232,13 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 	if (model?.api === "openai-codex-responses") {
 		try {
-			await logger.timeAsync("prewarmCodexWebsocket", prewarmOpenAICodexResponses, model, {
+			await prewarmOpenAICodexResponses(model, {
 				apiKey: await modelRegistry.getApiKey(model, sessionId),
 				sessionId,
 				preferWebsockets: preferOpenAICodexWebsockets,
 				providerSessionState: session.providerSessionState,
 			});
+			time("prewarmCodexWebsocket");
 		} catch (error) {
 			logger.debug("Codex websocket prewarm failed", {
 				error: error instanceof Error ? error.message : String(error),
@@ -1266,13 +1252,14 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	let lspServers: CreateAgentSessionResult["lspServers"];
 	if (enableLsp && settings.get("lsp.diagnosticsOnWrite")) {
 		try {
-			const result = await logger.timeAsync("warmupLspServers", warmupLspServers, cwd, {
+			const result = await warmupLspServers(cwd, {
 				onConnecting: serverNames => {
 					if (options.hasUI && serverNames.length > 0) {
 						process.stderr.write(chalk.gray(`Starting LSP servers: ${serverNames.join(", ")}…\n`));
 					}
 				},
 			});
+			time("warmupLspServers");
 			lspServers = result.servers;
 		} catch (error) {
 			logger.warn("LSP server warmup failed", { cwd, error: String(error) });

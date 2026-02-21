@@ -2,6 +2,7 @@ import * as path from "node:path";
 import { isEnoent, logger } from "@oh-my-pi/pi-utils";
 import { getAgentDir, getProjectDir } from "@oh-my-pi/pi-utils/dirs";
 import { OutputSink } from "../session/streaming-output";
+import { time } from "../utils/timings";
 import { shutdownSharedGateway } from "./gateway-coordinator";
 import {
 	checkPythonKernelAvailability,
@@ -225,7 +226,8 @@ export async function warmPythonEnvironment(
 	const isTestEnv = Bun.env.BUN_ENV === "test" || Bun.env.NODE_ENV === "test";
 	let cacheState: PreludeCacheState | null = null;
 	try {
-		await logger.timeAsync("warmPython:ensureKernelAvailable", () => ensureKernelAvailable(cwd));
+		await ensureKernelAvailable(cwd);
+		time("warmPython:ensureKernelAvailable");
 	} catch (err: unknown) {
 		const reason = err instanceof Error ? err.message : String(err);
 		cachedPreludeDocs = [];
@@ -249,15 +251,14 @@ export async function warmPythonEnvironment(
 	}
 	const resolvedSessionId = sessionId ?? `session:${cwd}`;
 	try {
-		const docs = await logger.timeAsync("warmPython:withKernelSession", () =>
-			withKernelSession(
-				resolvedSessionId,
-				cwd,
-				async kernel => kernel.introspectPrelude(),
-				useSharedGateway,
-				sessionFile,
-			),
+		const docs = await withKernelSession(
+			resolvedSessionId,
+			cwd,
+			async kernel => kernel.introspectPrelude(),
+			useSharedGateway,
+			sessionFile,
 		);
+		time("warmPython:withKernelSession");
 		cachedPreludeDocs = docs;
 		if (!isTestEnv && docs.length > 0) {
 			const state = cacheState ?? (await buildPreludeCacheState(cwd));
@@ -324,9 +325,8 @@ async function createKernelSession(
 
 	let kernel: PythonKernel;
 	try {
-		kernel = await logger.timeAsync("createKernelSession:PythonKernel.start", () =>
-			PythonKernel.start({ cwd, useSharedGateway, env }),
-		);
+		kernel = await PythonKernel.start({ cwd, useSharedGateway, env });
+		time("createKernelSession:PythonKernel.start");
 	} catch (err) {
 		if (!isRetry && isResourceExhaustionError(err)) {
 			await recoverFromResourceExhaustion();
@@ -409,15 +409,8 @@ async function withKernelSession<T>(
 		if (kernelSessions.size >= MAX_KERNEL_SESSIONS) {
 			await evictOldestSession();
 		}
-		session = await logger.timeAsync(
-			"kernel:createKernelSession",
-			createKernelSession,
-			sessionId,
-			cwd,
-			useSharedGateway,
-			sessionFile,
-			artifactsDir,
-		);
+		session = await createKernelSession(sessionId, cwd, useSharedGateway, sessionFile, artifactsDir);
+		time("kernel:createKernelSession");
 		kernelSessions.set(sessionId, session);
 		startCleanupTimer();
 	}
@@ -425,34 +418,22 @@ async function withKernelSession<T>(
 	const run = async (): Promise<T> => {
 		session!.lastUsedAt = Date.now();
 		if (session!.dead || !session!.kernel.isAlive()) {
-			await logger.timeAsync(
-				"kernel:restartKernelSession",
-				restartKernelSession,
-				session!,
-				cwd,
-				useSharedGateway,
-				sessionFile,
-				artifactsDir,
-			);
+			await restartKernelSession(session!, cwd, useSharedGateway, sessionFile, artifactsDir);
+			time("kernel:restartKernelSession");
 		}
 		try {
-			const result = await logger.timeAsync("kernel:withSession:handler", handler, session!.kernel);
+			const result = await handler(session!.kernel);
+			time("kernel:withSession:handler");
 			session!.restartCount = 0;
 			return result;
 		} catch (err) {
 			if (!session!.dead && session!.kernel.isAlive()) {
 				throw err;
 			}
-			await logger.timeAsync(
-				"kernel:restartKernelSession",
-				restartKernelSession,
-				session!,
-				cwd,
-				useSharedGateway,
-				sessionFile,
-				artifactsDir,
-			);
-			const result = await logger.timeAsync("kernel:postRestart:handler", handler, session!.kernel);
+			await restartKernelSession(session!, cwd, useSharedGateway, sessionFile, artifactsDir);
+			time("kernel:restartKernelSession");
+			const result = await handler(session!.kernel);
+			time("kernel:postRestart:handler");
 			session!.restartCount = 0;
 			return result;
 		}

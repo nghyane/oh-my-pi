@@ -10,8 +10,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { logger } from "@oh-my-pi/pi-utils";
 import { getProjectDir } from "@oh-my-pi/pi-utils/dirs";
-
 import type { Settings } from "../config/settings";
+import { time } from "../utils/timings";
 import { clearCache as clearFsCache, cacheStats as fsCacheStats, invalidate as invalidateFs } from "./fs";
 import type {
 	Capability,
@@ -112,9 +112,8 @@ async function loadImpl<T>(
 	const results = await Promise.all(
 		providers.map(async provider => {
 			try {
-				const result = await logger.timeAsync(`capability:${capability.id}:${provider.id}`, () =>
-					provider.load(ctx),
-				);
+				const result = await provider.load(ctx);
+				time(`capability:${capability.id}:${provider.id}`);
 				return { provider, result };
 			} catch (error) {
 				logger.debug(`capability:${capability.id}:${provider.id}:error`);

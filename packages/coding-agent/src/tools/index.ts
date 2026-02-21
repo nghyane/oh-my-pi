@@ -13,6 +13,7 @@ import type { ArtifactManager } from "../session/artifacts";
 import { TaskTool } from "../task";
 import type { AgentOutputManager } from "../task/output-manager";
 import type { EventBus } from "../utils/event-bus";
+import { time } from "../utils/timings";
 import { SearchTool } from "../web/search";
 import { AskTool } from "./ask";
 import { BashTool } from "./bash";
@@ -222,6 +223,7 @@ function getPythonModeFromEnv(): PythonToolMode | null {
  * Create tools from BUILTIN_TOOLS registry.
  */
 export async function createTools(session: ToolSession, toolNames?: string[]): Promise<Tool[]> {
+	time("createTools:start");
 	const includeSubmitResult = session.requireSubmitResultTool === true;
 	const enableLsp = session.enableLsp ?? true;
 	const requestedTools = toolNames && toolNames.length > 0 ? [...new Set(toolNames)] : undefined;
@@ -235,11 +237,8 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 	const isTestEnv = Bun.env.BUN_ENV === "test" || Bun.env.NODE_ENV === "test";
 	const skipPythonWarm = isTestEnv || $env.PI_PYTHON_SKIP_CHECK === "1";
 	if (shouldCheckPython) {
-		const availability = await logger.timeAsync(
-			"createTools:pythonCheck",
-			checkPythonKernelAvailability,
-			session.cwd,
-		);
+		const availability = await checkPythonKernelAvailability(session.cwd);
+		time("createTools:pythonCheck");
 		pythonAvailable = availability.ok;
 		if (!availability.ok) {
 			logger.warn("Python kernel unavailable, falling back to bash", {
@@ -249,13 +248,8 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 			const sessionFile = session.getSessionFile?.() ?? undefined;
 			const warmSessionId = sessionFile ? `session:${sessionFile}:cwd:${session.cwd}` : `cwd:${session.cwd}`;
 			try {
-				await logger.timeAsync(
-					"createTools:warmPython",
-					warmPythonEnvironment,
-					session.cwd,
-					warmSessionId,
-					session.settings.get("python.sharedGateway"),
-				);
+				await warmPythonEnvironment(session.cwd, warmSessionId, session.settings.get("python.sharedGateway"));
+				time("createTools:warmPython");
 			} catch (err) {
 				logger.warn("Failed to warm Python environment", {
 					error: err instanceof Error ? err.message : String(err),
@@ -316,7 +310,8 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 			if (filteredRequestedTools && !filteredRequestedTools.includes(name)) {
 				return null;
 			}
-			const tool = await logger.timeAsync(`createTools:${name}`, factory, session);
+			const tool = await factory(session);
+			time(`createTools:${name}`);
 			return tool ? wrapToolWithMetaNotice(tool) : null;
 		}),
 	);

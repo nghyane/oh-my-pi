@@ -7,7 +7,7 @@ import * as fs from "node:fs";
 import { createRequire } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
-import { $env, logger } from "@oh-my-pi/pi-utils";
+import { $env } from "@oh-my-pi/pi-utils";
 import { getNativesDir } from "@oh-my-pi/pi-utils/dirs";
 import packageJson from "../package.json";
 import type { NativeBindings } from "./bindings";
@@ -64,16 +64,13 @@ const candidates = $env.PI_DEV ? [...debugCandidates, ...releaseCandidates] : re
 const dedupedCandidates = [...new Set(candidates)];
 
 function runCommand(command: string, args: string[]): string | null {
-	const cmdLine = `${command} '${args.join(" ")}'`;
-	return logger.time(`runCommand:${cmdLine}`, () => {
-		try {
-			const result = Bun.spawnSync([command, ...args], { stdout: "pipe", stderr: "pipe" });
-			if (result.exitCode !== 0) return null;
-			return result.stdout.toString("utf-8").trim();
-		} catch {
-			return null;
-		}
-	});
+	try {
+		const result = Bun.spawnSync([command, ...args], { stdout: "pipe", stderr: "pipe" });
+		if (result.exitCode !== 0) return null;
+		return result.stdout.toString("utf-8").trim();
+	} catch {
+		return null;
+	}
 }
 
 function getVariantOverride(): CpuVariant | null {
@@ -122,7 +119,7 @@ function detectAvx2Support(): boolean {
 function resolveCpuVariant(override: CpuVariant | null): CpuVariant | null {
 	if (process.arch !== "x64") return null;
 	if (override) return override;
-	return logger.time("native:detectAvx2Support", () => detectAvx2Support()) ? "modern" : "baseline";
+	return detectAvx2Support() ? "modern" : "baseline";
 }
 
 function getAddonFilenames(tag: string, variant: CpuVariant | null): string[] {
@@ -181,13 +178,11 @@ function maybeExtractEmbeddedAddon(errors: string[]): string | null {
 }
 function loadNative(): NativeBindings {
 	const errors: string[] = [];
-	const embeddedCandidate = logger.time("native:maybeExtractEmbeddedAddon", () => maybeExtractEmbeddedAddon(errors));
+	const embeddedCandidate = maybeExtractEmbeddedAddon(errors);
 	const runtimeCandidates = embeddedCandidate ? [embeddedCandidate, ...dedupedCandidates] : dedupedCandidates;
 	for (const candidate of runtimeCandidates) {
 		try {
-			const bindings = logger.time(`native:loadNative:require:${path.basename(candidate)}`, () =>
-				require(candidate),
-			) as NativeBindings;
+			const bindings = require(candidate) as NativeBindings;
 			validateNative(bindings, candidate);
 			if ($env.PI_DEV) {
 				console.log(`Loaded native addon from ${candidate}`);
@@ -275,4 +270,4 @@ function validateNative(bindings: NativeBindings, source: string): void {
 		);
 	}
 }
-export const native = logger.time("native:loadNative", () => loadNative());
+export const native = loadNative();

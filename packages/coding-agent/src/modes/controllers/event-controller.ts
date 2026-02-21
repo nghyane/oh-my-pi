@@ -206,7 +206,7 @@ export class EventController {
 						this.ctx.streamingMessage.stopReason !== "error"
 					) {
 						for (const [toolCallId, component] of this.ctx.pendingTools.entries()) {
-							component?.setArgsComplete(toolCallId);
+							component.setArgsComplete(toolCallId);
 						}
 					}
 					this.ctx.streamingComponent = undefined;

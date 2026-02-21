@@ -28,6 +28,7 @@ import { HistoryStorage } from "../session/history-storage";
 import type { SessionContext, SessionManager } from "../session/session-manager";
 import { getRecentSessions } from "../session/session-manager";
 import { STTController, type SttState } from "../stt";
+import { time } from "../utils/timings";
 import { setTerminalTitle } from "../utils/title-generator";
 import type { AssistantMessageComponent } from "./components/assistant-message";
 import type { BashExecutionComponent } from "./components/bash-execution";
@@ -245,28 +246,27 @@ export class InteractiveMode implements InteractiveModeContext {
 	async init(): Promise<void> {
 		if (this.isInitialized) return;
 
-		this.keybindings = await logger.timeAsync("InteractiveMode.init:keybindings", () => KeybindingsManager.create());
+		this.keybindings = await KeybindingsManager.create();
+		time("InteractiveMode.init:keybindings");
 
 		// Register session manager flush for signal handlers (SIGINT, SIGTERM, SIGHUP)
 		this.#cleanupUnsubscribe = postmortem.register("session-manager-flush", () => this.sessionManager.flush());
 
-		await logger.timeAsync("InteractiveMode.init:slashCommands", () =>
-			this.refreshSlashCommandState(getProjectDir()),
-		);
+		await this.refreshSlashCommandState(getProjectDir());
+		time("InteractiveMode.init:slashCommands");
 
 		// Get current model info for welcome screen
 		const modelName = this.session.model?.name ?? "Unknown";
 		const providerName = this.session.model?.provider ?? "Unknown";
 
 		// Get recent sessions
-		const recentSessions = await logger.timeAsync("InteractiveMode.init:recentSessions", () =>
-			getRecentSessions(this.sessionManager.getSessionDir()).then(sessions =>
-				sessions.map(s => ({
-					name: s.name,
-					timeAgo: s.timeAgo,
-				})),
-			),
+		const recentSessions = await getRecentSessions(this.sessionManager.getSessionDir()).then(sessions =>
+			sessions.map(s => ({
+				name: s.name,
+				timeAgo: s.timeAgo,
+			})),
 		);
+		time("InteractiveMode.init:recentSessions");
 
 		// Convert LSP servers to welcome format
 		const lspServerInfo =

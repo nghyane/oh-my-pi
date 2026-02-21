@@ -46,7 +46,9 @@ export const taskItemSchema = Type.Object({
 export type TaskItem = Static<typeof taskItemSchema>;
 
 export const taskSchema = Type.Object({
-	agent: Type.String({ description: "Agent type for all tasks in this batch" }),
+	agent: Type.String({
+		description: "Agent type for all tasks in this batch. Must be one of the agents listed in the tool description.",
+	}),
 	context: Type.Optional(
 		Type.String({
 			description:
