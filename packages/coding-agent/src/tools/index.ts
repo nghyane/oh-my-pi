@@ -320,5 +320,13 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 			return tool ? wrapToolWithMetaNotice(tool) : null;
 		}),
 	);
-	return results.filter((r): r is Tool => r !== null);
+	const tools = results.filter((r): r is Tool => r !== null);
+
+	// Code Mode: wrap all eligible tools into a single "code" tool
+	if (session.settings.get("codemode.enabled")) {
+		const { codeTool, excludedTools } = createCodeTool(tools);
+		return [codeTool as Tool, ...(excludedTools as Tool[])];
+	}
+
+	return tools;
 }
