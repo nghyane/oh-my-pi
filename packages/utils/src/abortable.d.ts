@@ -1,5 +1,5 @@
 export declare class AbortError extends Error {
-    constructor(signal: AbortSignal);
+	constructor(signal: AbortSignal);
 }
 /**
  * Sleep for a given number of milliseconds, respecting abort signal.

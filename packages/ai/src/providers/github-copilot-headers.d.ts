@@ -11,7 +11,7 @@ export declare function hasCopilotVisionInput(messages: Message[]): boolean;
  * Static headers (User-Agent, Editor-Version, etc.) come from model.headers.
  */
 export declare function buildCopilotDynamicHeaders(params: {
-    messages: unknown[];
-    hasImages: boolean;
+	messages: unknown[];
+	hasImages: boolean;
 }): Record<string, string>;
 //# sourceMappingURL=github-copilot-headers.d.ts.map

@@ -1,9 +1,9 @@
 import type { Subprocess } from "bun";
 export interface ShellConfig {
-    shell: string;
-    args: string[];
-    env: Record<string, string>;
-    prefix: string | undefined;
+	shell: string;
+	args: string[];
+	env: Record<string, string>;
+	prefix: string | undefined;
 }
 /**
  * Resolve a basic shell (bash or sh) as fallback.
@@ -36,14 +36,14 @@ export declare function setNativeKillTree(fn: KillTreeFn): void;
  * Options for terminating a process and all its descendants.
  */
 export interface TerminateOptions {
-    /** The process to terminate */
-    target: Subprocess | number;
-    /** Whether to terminate the process tree (all descendants) */
-    group?: boolean;
-    /** Timeout in milliseconds */
-    timeout?: number;
-    /** Abort signal */
-    signal?: AbortSignal;
+	/** The process to terminate */
+	target: Subprocess | number;
+	/** Whether to terminate the process tree (all descendants) */
+	group?: boolean;
+	/** Timeout in milliseconds */
+	timeout?: number;
+	/** Abort signal */
+	signal?: AbortSignal;
 }
 /**
  * Check if a process is running.

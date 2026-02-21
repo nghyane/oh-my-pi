@@ -3,8 +3,8 @@ import type { OAuthController, OAuthCredentials } from "./types";
  * Login with OpenAI Codex OAuth
  */
 export type OpenAICodexLoginOptions = OAuthController & {
-    /** Optional originator value for OpenAI Codex OAuth. Default: "opencode". */
-    originator?: string;
+	/** Optional originator value for OpenAI Codex OAuth. Default: "opencode". */
+	originator?: string;
 };
 export declare function loginOpenAICodex(options: OpenAICodexLoginOptions): Promise<OAuthCredentials>;
 /**

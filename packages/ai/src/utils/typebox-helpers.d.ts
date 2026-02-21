@@ -10,8 +10,11 @@ import { type TUnsafe } from "@sinclair/typebox";
  *
  * type Operation = Static<typeof OperationSchema>; // "add" | "subtract" | "multiply" | "divide"
  */
-export declare function StringEnum<const T extends readonly string[]>(values: T, options?: {
-    description?: string;
-    default?: T[number];
-}): TUnsafe<T[number]>;
+export declare function StringEnum<const T extends readonly string[]>(
+	values: T,
+	options?: {
+		description?: string;
+		default?: T[number];
+	},
+): TUnsafe<T[number]>;
 //# sourceMappingURL=typebox-helpers.d.ts.map

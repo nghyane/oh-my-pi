@@ -208,6 +208,8 @@ export interface RenderResultOptions {
  */
 export interface AgentToolContext {
 	// Empty by default - apps extend via declaration merging
+	/** Emit an event to the agent's event stream (used by meta-tools like Code Mode) */
+	emit?: (event: AgentEvent) => void;
 }
 
 export type AgentToolExecFn<TParameters extends TSchema = TSchema, TDetails = any, TTheme = unknown> = (
@@ -271,6 +273,29 @@ export type AgentEvent =
 	| { type: "message_update"; message: AgentMessage; assistantMessageEvent: AssistantMessageEvent }
 	| { type: "message_end"; message: AgentMessage }
 	// Tool execution lifecycle
-	| { type: "tool_execution_start"; toolCallId: string; toolName: string; args: any; intent?: string }
-	| { type: "tool_execution_update"; toolCallId: string; toolName: string; args: any; partialResult: any }
-	| { type: "tool_execution_end"; toolCallId: string; toolName: string; result: any; isError?: boolean };
+	| {
+			type: "tool_execution_start";
+			toolCallId: string;
+			toolName: string;
+			args: any;
+			intent?: string;
+			tool?: AgentTool;
+			/** Set when this event is a sub-tool call inside a meta-tool (e.g. Code Mode) */
+			parentToolCallId?: string;
+	  }
+	| {
+			type: "tool_execution_update";
+			toolCallId: string;
+			toolName: string;
+			args: any;
+			partialResult: any;
+			parentToolCallId?: string;
+	  }
+	| {
+			type: "tool_execution_end";
+			toolCallId: string;
+			toolName: string;
+			result: any;
+			isError?: boolean;
+			parentToolCallId?: string;
+	  };

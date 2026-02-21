@@ -9,5 +9,9 @@ import type { Api, AssistantMessage, Message, Model } from "../types";
  * - Injects synthetic "aborted" tool results
  * - Adds a <turn_aborted> guidance marker for the model
  */
-export declare function transformMessages<TApi extends Api>(messages: Message[], model: Model<TApi>, normalizeToolCallId?: (id: string, model: Model<TApi>, source: AssistantMessage) => string): Message[];
+export declare function transformMessages<TApi extends Api>(
+	messages: Message[],
+	model: Model<TApi>,
+	normalizeToolCallId?: (id: string, model: Model<TApi>, source: AssistantMessage) => string,
+): Message[];
 //# sourceMappingURL=transform-messages.d.ts.map

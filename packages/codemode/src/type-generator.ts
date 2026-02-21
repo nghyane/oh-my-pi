@@ -9,12 +9,53 @@ import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import { jsonSchemaToTypeScript } from "./schema-to-ts";
 
 const JS_RESERVED = new Set([
-	"break", "case", "catch", "class", "const", "continue", "debugger", "default",
-	"delete", "do", "else", "enum", "export", "extends", "false", "finally",
-	"for", "function", "if", "import", "in", "instanceof", "new", "null",
-	"return", "super", "switch", "this", "throw", "true", "try", "typeof",
-	"var", "void", "while", "with", "yield", "let", "static", "implements",
-	"interface", "package", "private", "protected", "public", "await", "async",
+	"break",
+	"case",
+	"catch",
+	"class",
+	"const",
+	"continue",
+	"debugger",
+	"default",
+	"delete",
+	"do",
+	"else",
+	"enum",
+	"export",
+	"extends",
+	"false",
+	"finally",
+	"for",
+	"function",
+	"if",
+	"import",
+	"in",
+	"instanceof",
+	"new",
+	"null",
+	"return",
+	"super",
+	"switch",
+	"this",
+	"throw",
+	"true",
+	"try",
+	"typeof",
+	"var",
+	"void",
+	"while",
+	"with",
+	"yield",
+	"let",
+	"static",
+	"implements",
+	"interface",
+	"package",
+	"private",
+	"protected",
+	"public",
+	"await",
+	"async",
 ]);
 
 /**
@@ -63,6 +104,10 @@ export function generateTypes(tools: AgentTool[]): GeneratedTypes {
 
 	for (const tool of tools) {
 		const safeName = sanitizeToolName(tool.name);
+		const existing = nameMap.get(safeName);
+		if (existing && existing !== tool.name) {
+			throw new Error(`Tool name collision: "${tool.name}" and "${existing}" both sanitize to "${safeName}"`);
+		}
 		const pascalName = toPascalCase(safeName);
 		nameMap.set(safeName, tool.name);
 

@@ -3,7 +3,23 @@ import type { BedrockOptions } from "./providers/amazon-bedrock";
 import type { AnthropicOptions } from "./providers/anthropic";
 import type { AzureOpenAIResponsesOptions } from "./providers/azure-openai-responses";
 import type { CursorOptions } from "./providers/cursor";
-import type { DeleteArgs, DeleteResult, DiagnosticsArgs, DiagnosticsResult, GrepArgs, GrepResult, LsArgs, LsResult, McpResult, ReadArgs, ReadResult, ShellArgs, ShellResult, WriteArgs, WriteResult } from "./providers/cursor/gen/agent_pb";
+import type {
+	DeleteArgs,
+	DeleteResult,
+	DiagnosticsArgs,
+	DiagnosticsResult,
+	GrepArgs,
+	GrepResult,
+	LsArgs,
+	LsResult,
+	McpResult,
+	ReadArgs,
+	ReadResult,
+	ShellArgs,
+	ShellResult,
+	WriteArgs,
+	WriteResult,
+} from "./providers/cursor/gen/agent_pb";
 import type { GoogleOptions } from "./providers/google";
 import type { GoogleGeminiCliOptions } from "./providers/google-gemini-cli";
 import type { GoogleVertexOptions } from "./providers/google-vertex";
@@ -12,309 +28,385 @@ import type { OpenAICompletionsOptions } from "./providers/openai-completions";
 import type { OpenAIResponsesOptions } from "./providers/openai-responses";
 import type { AssistantMessageEventStream } from "./utils/event-stream";
 export type { AssistantMessageEventStream } from "./utils/event-stream";
-export type KnownApi = "openai-completions" | "openai-responses" | "openai-codex-responses" | "azure-openai-responses" | "anthropic-messages" | "bedrock-converse-stream" | "google-generative-ai" | "google-gemini-cli" | "google-vertex" | "cursor-agent";
+export type KnownApi =
+	| "openai-completions"
+	| "openai-responses"
+	| "openai-codex-responses"
+	| "azure-openai-responses"
+	| "anthropic-messages"
+	| "bedrock-converse-stream"
+	| "google-generative-ai"
+	| "google-gemini-cli"
+	| "google-vertex"
+	| "cursor-agent";
 export type Api = KnownApi | (string & {});
 export interface ApiOptionsMap {
-    "anthropic-messages": AnthropicOptions;
-    "bedrock-converse-stream": BedrockOptions;
-    "openai-completions": OpenAICompletionsOptions;
-    "openai-responses": OpenAIResponsesOptions;
-    "openai-codex-responses": OpenAICodexResponsesOptions;
-    "azure-openai-responses": AzureOpenAIResponsesOptions;
-    "google-generative-ai": GoogleOptions;
-    "google-gemini-cli": GoogleGeminiCliOptions;
-    "google-vertex": GoogleVertexOptions;
-    "cursor-agent": CursorOptions;
+	"anthropic-messages": AnthropicOptions;
+	"bedrock-converse-stream": BedrockOptions;
+	"openai-completions": OpenAICompletionsOptions;
+	"openai-responses": OpenAIResponsesOptions;
+	"openai-codex-responses": OpenAICodexResponsesOptions;
+	"azure-openai-responses": AzureOpenAIResponsesOptions;
+	"google-generative-ai": GoogleOptions;
+	"google-gemini-cli": GoogleGeminiCliOptions;
+	"google-vertex": GoogleVertexOptions;
+	"cursor-agent": CursorOptions;
 }
-export type OptionsForApi<TApi extends Api> = StreamOptions | (TApi extends keyof ApiOptionsMap ? ApiOptionsMap[TApi] : never);
-export type KnownProvider = "amazon-bedrock" | "anthropic" | "google" | "google-gemini-cli" | "google-antigravity" | "google-vertex" | "openai" | "openai-codex" | "kimi-code" | "minimax-code" | "minimax-code-cn" | "github-copilot" | "cursor" | "xai" | "groq" | "cerebras" | "openrouter" | "vercel-ai-gateway" | "zai" | "mistral" | "minimax" | "opencode" | "synthetic" | "cloudflare-ai-gateway" | "huggingface" | "litellm" | "moonshot" | "nvidia" | "nanogpt" | "ollama" | "qianfan" | "qwen-portal" | "together" | "venice" | "vllm" | "xiaomi";
+export type OptionsForApi<TApi extends Api> =
+	| StreamOptions
+	| (TApi extends keyof ApiOptionsMap ? ApiOptionsMap[TApi] : never);
+export type KnownProvider =
+	| "amazon-bedrock"
+	| "anthropic"
+	| "google"
+	| "google-gemini-cli"
+	| "google-antigravity"
+	| "google-vertex"
+	| "openai"
+	| "openai-codex"
+	| "kimi-code"
+	| "minimax-code"
+	| "minimax-code-cn"
+	| "github-copilot"
+	| "cursor"
+	| "xai"
+	| "groq"
+	| "cerebras"
+	| "openrouter"
+	| "vercel-ai-gateway"
+	| "zai"
+	| "mistral"
+	| "minimax"
+	| "opencode"
+	| "synthetic"
+	| "cloudflare-ai-gateway"
+	| "huggingface"
+	| "litellm"
+	| "moonshot"
+	| "nvidia"
+	| "nanogpt"
+	| "ollama"
+	| "qianfan"
+	| "qwen-portal"
+	| "together"
+	| "venice"
+	| "vllm"
+	| "xiaomi";
 export type Provider = KnownProvider | string;
 export type ThinkingLevel = "minimal" | "low" | "medium" | "high" | "xhigh";
 /** Token budgets for each thinking level (token-based providers only) */
 export type ThinkingBudgets = {
-    [key in ThinkingLevel]?: number;
+	[key in ThinkingLevel]?: number;
 };
-export type ToolChoice = "auto" | "none" | "any" | "required" | {
-    type: "function";
-    name: string;
-} | {
-    type: "function";
-    function: {
-        name: string;
-    };
-} | {
-    type: "tool";
-    name: string;
-};
+export type ToolChoice =
+	| "auto"
+	| "none"
+	| "any"
+	| "required"
+	| {
+			type: "function";
+			name: string;
+	  }
+	| {
+			type: "function";
+			function: {
+				name: string;
+			};
+	  }
+	| {
+			type: "tool";
+			name: string;
+	  };
 export type CacheRetention = "none" | "short" | "long";
 export interface ProviderSessionState {
-    close(): void;
+	close(): void;
 }
 export interface StreamOptions {
-    temperature?: number;
-    maxTokens?: number;
-    signal?: AbortSignal;
-    apiKey?: string;
-    /**
-     * Prompt cache retention preference. Providers map this to their supported values.
-     * Default: "short".
-     */
-    cacheRetention?: CacheRetention;
-    /**
-     * Additional headers to include in provider requests.
-     * These are merged on top of model-defined headers.
-     */
-    headers?: Record<string, string>;
-    /**
-     * Maximum delay in milliseconds to wait for a retry when the server requests a long wait.
-     * If the server's requested delay exceeds this value, the request fails immediately
-     * with an error containing the requested delay, allowing higher-level retry logic
-     * to handle it with user visibility.
-     * Default: 60000 (60 seconds). Set to 0 to disable the cap.
-     */
-    maxRetryDelayMs?: number;
-    /**
-     * Optional metadata to include in API requests.
-     * Providers extract the fields they understand and ignore the rest.
-     * For example, Anthropic uses `user_id` for abuse tracking and rate limiting.
-     */
-    metadata?: Record<string, unknown>;
-    /**
-     * Optional session identifier for providers that support session-based caching.
-     * Providers can use this to enable prompt caching, request routing, or other
-     * session-aware features. Ignored by providers that don't support it.
-     */
-    sessionId?: string;
-    /**
-     * Provider-scoped mutable state store for this agent session.
-     * Providers can use this to persist transport/session state between turns.
-     */
-    providerSessionState?: Map<string, ProviderSessionState>;
-    /**
-     * Optional hook to observe the provider request payload before it is sent.
-     * The payload format is provider-specific.
-     */
-    onPayload?: (payload: unknown) => void;
-    /** Cursor exec/MCP tool handlers (cursor-agent only). */
-    execHandlers?: CursorExecHandlers;
+	temperature?: number;
+	maxTokens?: number;
+	signal?: AbortSignal;
+	apiKey?: string;
+	/**
+	 * Prompt cache retention preference. Providers map this to their supported values.
+	 * Default: "short".
+	 */
+	cacheRetention?: CacheRetention;
+	/**
+	 * Additional headers to include in provider requests.
+	 * These are merged on top of model-defined headers.
+	 */
+	headers?: Record<string, string>;
+	/**
+	 * Maximum delay in milliseconds to wait for a retry when the server requests a long wait.
+	 * If the server's requested delay exceeds this value, the request fails immediately
+	 * with an error containing the requested delay, allowing higher-level retry logic
+	 * to handle it with user visibility.
+	 * Default: 60000 (60 seconds). Set to 0 to disable the cap.
+	 */
+	maxRetryDelayMs?: number;
+	/**
+	 * Optional metadata to include in API requests.
+	 * Providers extract the fields they understand and ignore the rest.
+	 * For example, Anthropic uses `user_id` for abuse tracking and rate limiting.
+	 */
+	metadata?: Record<string, unknown>;
+	/**
+	 * Optional session identifier for providers that support session-based caching.
+	 * Providers can use this to enable prompt caching, request routing, or other
+	 * session-aware features. Ignored by providers that don't support it.
+	 */
+	sessionId?: string;
+	/**
+	 * Provider-scoped mutable state store for this agent session.
+	 * Providers can use this to persist transport/session state between turns.
+	 */
+	providerSessionState?: Map<string, ProviderSessionState>;
+	/**
+	 * Optional hook to observe the provider request payload before it is sent.
+	 * The payload format is provider-specific.
+	 */
+	onPayload?: (payload: unknown) => void;
+	/** Cursor exec/MCP tool handlers (cursor-agent only). */
+	execHandlers?: CursorExecHandlers;
 }
 export interface SimpleStreamOptions extends StreamOptions {
-    reasoning?: ThinkingLevel;
-    /** Custom token budgets for thinking levels (token-based providers only) */
-    thinkingBudgets?: ThinkingBudgets;
-    /** Cursor exec handlers for local tool execution */
-    cursorExecHandlers?: CursorExecHandlers;
-    /** Hook to handle tool results from Cursor exec */
-    cursorOnToolResult?: CursorToolResultHandler;
-    /** Optional tool choice override for compatible providers */
-    toolChoice?: ToolChoice;
-    /** API format for Kimi Code provider: "openai" or "anthropic" (default: "anthropic") */
-    kimiApiFormat?: "openai" | "anthropic";
-    /** API format for Synthetic provider: "openai" or "anthropic" (default: "openai") */
-    syntheticApiFormat?: "openai" | "anthropic";
-    /** Hint that websocket transport should be preferred when supported by the provider implementation. */
-    preferWebsockets?: boolean;
+	reasoning?: ThinkingLevel;
+	/** Custom token budgets for thinking levels (token-based providers only) */
+	thinkingBudgets?: ThinkingBudgets;
+	/** Cursor exec handlers for local tool execution */
+	cursorExecHandlers?: CursorExecHandlers;
+	/** Hook to handle tool results from Cursor exec */
+	cursorOnToolResult?: CursorToolResultHandler;
+	/** Optional tool choice override for compatible providers */
+	toolChoice?: ToolChoice;
+	/** API format for Kimi Code provider: "openai" or "anthropic" (default: "anthropic") */
+	kimiApiFormat?: "openai" | "anthropic";
+	/** API format for Synthetic provider: "openai" or "anthropic" (default: "openai") */
+	syntheticApiFormat?: "openai" | "anthropic";
+	/** Hint that websocket transport should be preferred when supported by the provider implementation. */
+	preferWebsockets?: boolean;
 }
-export type StreamFunction<TApi extends Api> = (model: Model<TApi>, context: Context, options: OptionsForApi<TApi>) => AssistantMessageEventStream;
+export type StreamFunction<TApi extends Api> = (
+	model: Model<TApi>,
+	context: Context,
+	options: OptionsForApi<TApi>,
+) => AssistantMessageEventStream;
 export interface TextContent {
-    type: "text";
-    text: string;
-    textSignature?: string;
+	type: "text";
+	text: string;
+	textSignature?: string;
 }
 export interface ThinkingContent {
-    type: "thinking";
-    thinking: string;
-    thinkingSignature?: string;
+	type: "thinking";
+	thinking: string;
+	thinkingSignature?: string;
 }
 export interface ImageContent {
-    type: "image";
-    data: string;
-    mimeType: string;
+	type: "image";
+	data: string;
+	mimeType: string;
 }
 export interface ToolCall {
-    type: "toolCall";
-    id: string;
-    name: string;
-    arguments: Record<string, any>;
-    thoughtSignature?: string;
-    intent?: string;
+	type: "toolCall";
+	id: string;
+	name: string;
+	arguments: Record<string, any>;
+	thoughtSignature?: string;
+	intent?: string;
 }
 export interface Usage {
-    input: number;
-    output: number;
-    cacheRead: number;
-    cacheWrite: number;
-    totalTokens: number;
-    cost: {
-        input: number;
-        output: number;
-        cacheRead: number;
-        cacheWrite: number;
-        total: number;
-    };
+	input: number;
+	output: number;
+	cacheRead: number;
+	cacheWrite: number;
+	totalTokens: number;
+	cost: {
+		input: number;
+		output: number;
+		cacheRead: number;
+		cacheWrite: number;
+		total: number;
+	};
 }
 export type StopReason = "stop" | "length" | "toolUse" | "error" | "aborted";
 export interface UserMessage {
-    role: "user";
-    content: string | (TextContent | ImageContent)[];
-    /** True if the message was injected by the system (e.g., auto-continue). */
-    synthetic?: boolean;
-    timestamp: number;
+	role: "user";
+	content: string | (TextContent | ImageContent)[];
+	/** True if the message was injected by the system (e.g., auto-continue). */
+	synthetic?: boolean;
+	timestamp: number;
 }
 export interface AssistantMessage {
-    role: "assistant";
-    content: (TextContent | ThinkingContent | ToolCall)[];
-    api: Api;
-    provider: Provider;
-    model: string;
-    usage: Usage;
-    stopReason: StopReason;
-    errorMessage?: string;
-    timestamp: number;
-    duration?: number;
-    ttft?: number;
+	role: "assistant";
+	content: (TextContent | ThinkingContent | ToolCall)[];
+	api: Api;
+	provider: Provider;
+	model: string;
+	usage: Usage;
+	stopReason: StopReason;
+	errorMessage?: string;
+	timestamp: number;
+	duration?: number;
+	ttft?: number;
 }
 export interface ToolResultMessage<TDetails = any, TInput = unknown> {
-    role: "toolResult";
-    toolCallId: string;
-    toolName: string;
-    content: (TextContent | ImageContent)[];
-    details?: TDetails;
-    isError: boolean;
-    /** Timestamp when output was pruned (ms since epoch). Undefined if unpruned. */
-    prunedAt?: number;
-    timestamp: number;
-    $normative?: TInput;
+	role: "toolResult";
+	toolCallId: string;
+	toolName: string;
+	content: (TextContent | ImageContent)[];
+	details?: TDetails;
+	isError: boolean;
+	/** Timestamp when output was pruned (ms since epoch). Undefined if unpruned. */
+	prunedAt?: number;
+	timestamp: number;
+	$normative?: TInput;
 }
 export type Message = UserMessage | AssistantMessage | ToolResultMessage;
-export type CursorExecHandlerResult<T> = {
-    result: T;
-    toolResult?: ToolResultMessage;
-} | T | ToolResultMessage;
-export type CursorToolResultHandler = (result: ToolResultMessage) => ToolResultMessage | undefined | Promise<ToolResultMessage | undefined>;
+export type CursorExecHandlerResult<T> =
+	| {
+			result: T;
+			toolResult?: ToolResultMessage;
+	  }
+	| T
+	| ToolResultMessage;
+export type CursorToolResultHandler = (
+	result: ToolResultMessage,
+) => ToolResultMessage | undefined | Promise<ToolResultMessage | undefined>;
 export interface CursorMcpCall {
-    name: string;
-    providerIdentifier: string;
-    toolName: string;
-    toolCallId: string;
-    args: Record<string, unknown>;
-    rawArgs: Record<string, Uint8Array>;
+	name: string;
+	providerIdentifier: string;
+	toolName: string;
+	toolCallId: string;
+	args: Record<string, unknown>;
+	rawArgs: Record<string, Uint8Array>;
 }
 export interface CursorExecHandlers {
-    read?: (args: ReadArgs) => Promise<CursorExecHandlerResult<ReadResult>>;
-    ls?: (args: LsArgs) => Promise<CursorExecHandlerResult<LsResult>>;
-    grep?: (args: GrepArgs) => Promise<CursorExecHandlerResult<GrepResult>>;
-    write?: (args: WriteArgs) => Promise<CursorExecHandlerResult<WriteResult>>;
-    delete?: (args: DeleteArgs) => Promise<CursorExecHandlerResult<DeleteResult>>;
-    shell?: (args: ShellArgs) => Promise<CursorExecHandlerResult<ShellResult>>;
-    diagnostics?: (args: DiagnosticsArgs) => Promise<CursorExecHandlerResult<DiagnosticsResult>>;
-    mcp?: (call: CursorMcpCall) => Promise<CursorExecHandlerResult<McpResult>>;
-    onToolResult?: CursorToolResultHandler;
+	read?: (args: ReadArgs) => Promise<CursorExecHandlerResult<ReadResult>>;
+	ls?: (args: LsArgs) => Promise<CursorExecHandlerResult<LsResult>>;
+	grep?: (args: GrepArgs) => Promise<CursorExecHandlerResult<GrepResult>>;
+	write?: (args: WriteArgs) => Promise<CursorExecHandlerResult<WriteResult>>;
+	delete?: (args: DeleteArgs) => Promise<CursorExecHandlerResult<DeleteResult>>;
+	shell?: (args: ShellArgs) => Promise<CursorExecHandlerResult<ShellResult>>;
+	diagnostics?: (args: DiagnosticsArgs) => Promise<CursorExecHandlerResult<DiagnosticsResult>>;
+	mcp?: (call: CursorMcpCall) => Promise<CursorExecHandlerResult<McpResult>>;
+	onToolResult?: CursorToolResultHandler;
 }
 export interface Tool<TParameters extends TSchema = TSchema> {
-    name: string;
-    description: string;
-    parameters: TParameters;
+	name: string;
+	description: string;
+	parameters: TParameters;
 }
 export interface Context {
-    systemPrompt?: string;
-    messages: Message[];
-    tools?: Tool[];
+	systemPrompt?: string;
+	messages: Message[];
+	tools?: Tool[];
 }
-export type AssistantMessageEvent = {
-    type: "start";
-    partial: AssistantMessage;
-} | {
-    type: "text_start";
-    contentIndex: number;
-    partial: AssistantMessage;
-} | {
-    type: "text_delta";
-    contentIndex: number;
-    delta: string;
-    partial: AssistantMessage;
-} | {
-    type: "text_end";
-    contentIndex: number;
-    content: string;
-    partial: AssistantMessage;
-} | {
-    type: "thinking_start";
-    contentIndex: number;
-    partial: AssistantMessage;
-} | {
-    type: "thinking_delta";
-    contentIndex: number;
-    delta: string;
-    partial: AssistantMessage;
-} | {
-    type: "thinking_end";
-    contentIndex: number;
-    content: string;
-    partial: AssistantMessage;
-} | {
-    type: "toolcall_start";
-    contentIndex: number;
-    partial: AssistantMessage;
-} | {
-    type: "toolcall_delta";
-    contentIndex: number;
-    delta: string;
-    partial: AssistantMessage;
-} | {
-    type: "toolcall_end";
-    contentIndex: number;
-    toolCall: ToolCall;
-    partial: AssistantMessage;
-} | {
-    type: "done";
-    reason: Extract<StopReason, "stop" | "length" | "toolUse">;
-    message: AssistantMessage;
-} | {
-    type: "error";
-    reason: Extract<StopReason, "aborted" | "error">;
-    error: AssistantMessage;
-};
+export type AssistantMessageEvent =
+	| {
+			type: "start";
+			partial: AssistantMessage;
+	  }
+	| {
+			type: "text_start";
+			contentIndex: number;
+			partial: AssistantMessage;
+	  }
+	| {
+			type: "text_delta";
+			contentIndex: number;
+			delta: string;
+			partial: AssistantMessage;
+	  }
+	| {
+			type: "text_end";
+			contentIndex: number;
+			content: string;
+			partial: AssistantMessage;
+	  }
+	| {
+			type: "thinking_start";
+			contentIndex: number;
+			partial: AssistantMessage;
+	  }
+	| {
+			type: "thinking_delta";
+			contentIndex: number;
+			delta: string;
+			partial: AssistantMessage;
+	  }
+	| {
+			type: "thinking_end";
+			contentIndex: number;
+			content: string;
+			partial: AssistantMessage;
+	  }
+	| {
+			type: "toolcall_start";
+			contentIndex: number;
+			partial: AssistantMessage;
+	  }
+	| {
+			type: "toolcall_delta";
+			contentIndex: number;
+			delta: string;
+			partial: AssistantMessage;
+	  }
+	| {
+			type: "toolcall_end";
+			contentIndex: number;
+			toolCall: ToolCall;
+			partial: AssistantMessage;
+	  }
+	| {
+			type: "done";
+			reason: Extract<StopReason, "stop" | "length" | "toolUse">;
+			message: AssistantMessage;
+	  }
+	| {
+			type: "error";
+			reason: Extract<StopReason, "aborted" | "error">;
+			error: AssistantMessage;
+	  };
 /**
  * Compatibility settings for openai-completions API.
  * Use this to override URL-based auto-detection for custom providers.
  */
 export interface OpenAICompat {
-    /** Whether the provider supports the `store` field. Default: auto-detected from URL. */
-    supportsStore?: boolean;
-    /** Whether the provider supports the `developer` role (vs `system`). Default: auto-detected from URL. */
-    supportsDeveloperRole?: boolean;
-    /** Whether the provider supports `reasoning_effort`. Default: auto-detected from URL. */
-    supportsReasoningEffort?: boolean;
-    /** Whether the provider supports `stream_options: { include_usage: true }` for token usage in streaming responses. Default: true. */
-    supportsUsageInStreaming?: boolean;
-    /** Which field to use for max tokens. Default: auto-detected from URL. */
-    maxTokensField?: "max_completion_tokens" | "max_tokens";
-    /** Whether tool results require the `name` field. Default: auto-detected from URL. */
-    requiresToolResultName?: boolean;
-    /** Whether a user message after tool results requires an assistant message in between. Default: auto-detected from URL. */
-    requiresAssistantAfterToolResult?: boolean;
-    /** Whether thinking blocks must be converted to text blocks with <thinking> delimiters. Default: auto-detected from URL. */
-    requiresThinkingAsText?: boolean;
-    /** Whether tool call IDs must be normalized to Mistral format (exactly 9 alphanumeric chars). Default: auto-detected from URL. */
-    requiresMistralToolIds?: boolean;
-    /** Format for reasoning/thinking parameter. "openai" uses reasoning_effort, "zai" uses thinking: { type: "enabled" }. Default: "openai". */
-    /** Format for reasoning/thinking parameter. "openai" uses reasoning_effort, "zai" uses thinking: { type: "enabled" }, "qwen" uses enable_thinking: boolean. Default: "openai". */
-    thinkingFormat?: "openai" | "zai" | "qwen";
-    /** Which reasoning content field to emit on assistant messages. Default: auto-detected. */
-    reasoningContentField?: "reasoning_content" | "reasoning" | "reasoning_text";
-    /** Whether assistant tool-call messages must include reasoning content. Default: false. */
-    requiresReasoningContentForToolCalls?: boolean;
-    /** Whether assistant tool-call messages must include non-empty content. Default: false. */
-    requiresAssistantContentForToolCalls?: boolean;
-    /** Whether the provider supports the `tool_choice` parameter. Default: true. */
-    supportsToolChoice?: boolean;
-    /** OpenRouter-specific routing preferences. Only used when baseUrl points to OpenRouter. */
-    openRouterRouting?: OpenRouterRouting;
-    /** Vercel AI Gateway routing preferences. Only used when baseUrl points to Vercel AI Gateway. */
-    vercelGatewayRouting?: VercelGatewayRouting;
-    /** Whether the provider supports the `strict` field in tool definitions. Default: true. */
-    supportsStrictMode?: boolean;
+	/** Whether the provider supports the `store` field. Default: auto-detected from URL. */
+	supportsStore?: boolean;
+	/** Whether the provider supports the `developer` role (vs `system`). Default: auto-detected from URL. */
+	supportsDeveloperRole?: boolean;
+	/** Whether the provider supports `reasoning_effort`. Default: auto-detected from URL. */
+	supportsReasoningEffort?: boolean;
+	/** Whether the provider supports `stream_options: { include_usage: true }` for token usage in streaming responses. Default: true. */
+	supportsUsageInStreaming?: boolean;
+	/** Which field to use for max tokens. Default: auto-detected from URL. */
+	maxTokensField?: "max_completion_tokens" | "max_tokens";
+	/** Whether tool results require the `name` field. Default: auto-detected from URL. */
+	requiresToolResultName?: boolean;
+	/** Whether a user message after tool results requires an assistant message in between. Default: auto-detected from URL. */
+	requiresAssistantAfterToolResult?: boolean;
+	/** Whether thinking blocks must be converted to text blocks with <thinking> delimiters. Default: auto-detected from URL. */
+	requiresThinkingAsText?: boolean;
+	/** Whether tool call IDs must be normalized to Mistral format (exactly 9 alphanumeric chars). Default: auto-detected from URL. */
+	requiresMistralToolIds?: boolean;
+	/** Format for reasoning/thinking parameter. "openai" uses reasoning_effort, "zai" uses thinking: { type: "enabled" }. Default: "openai". */
+	/** Format for reasoning/thinking parameter. "openai" uses reasoning_effort, "zai" uses thinking: { type: "enabled" }, "qwen" uses enable_thinking: boolean. Default: "openai". */
+	thinkingFormat?: "openai" | "zai" | "qwen";
+	/** Which reasoning content field to emit on assistant messages. Default: auto-detected. */
+	reasoningContentField?: "reasoning_content" | "reasoning" | "reasoning_text";
+	/** Whether assistant tool-call messages must include reasoning content. Default: false. */
+	requiresReasoningContentForToolCalls?: boolean;
+	/** Whether assistant tool-call messages must include non-empty content. Default: false. */
+	requiresAssistantContentForToolCalls?: boolean;
+	/** Whether the provider supports the `tool_choice` parameter. Default: true. */
+	supportsToolChoice?: boolean;
+	/** OpenRouter-specific routing preferences. Only used when baseUrl points to OpenRouter. */
+	openRouterRouting?: OpenRouterRouting;
+	/** Vercel AI Gateway routing preferences. Only used when baseUrl points to Vercel AI Gateway. */
+	vercelGatewayRouting?: VercelGatewayRouting;
+	/** Whether the provider supports the `strict` field in tool definitions. Default: true. */
+	supportsStrictMode?: boolean;
 }
 /**
  * OpenRouter provider routing preferences.
@@ -322,10 +414,10 @@ export interface OpenAICompat {
  * @see https://openrouter.ai/docs/provider-routing
  */
 export interface OpenRouterRouting {
-    /** List of provider slugs to exclusively use for this request (e.g., ["amazon-bedrock", "anthropic"]). */
-    only?: string[];
-    /** List of provider slugs to try in order (e.g., ["anthropic", "openai"]). */
-    order?: string[];
+	/** List of provider slugs to exclusively use for this request (e.g., ["amazon-bedrock", "anthropic"]). */
+	only?: string[];
+	/** List of provider slugs to try in order (e.g., ["anthropic", "openai"]). */
+	order?: string[];
 }
 /**
  * Vercel AI Gateway routing preferences.
@@ -333,35 +425,35 @@ export interface OpenRouterRouting {
  * @see https://vercel.com/docs/ai-gateway/models-and-providers/provider-options
  */
 export interface VercelGatewayRouting {
-    /** List of provider slugs to exclusively use for this request (e.g., ["bedrock", "anthropic"]). */
-    only?: string[];
-    /** List of provider slugs to try in order (e.g., ["anthropic", "openai"]). */
-    order?: string[];
+	/** List of provider slugs to exclusively use for this request (e.g., ["bedrock", "anthropic"]). */
+	only?: string[];
+	/** List of provider slugs to try in order (e.g., ["anthropic", "openai"]). */
+	order?: string[];
 }
 export interface Model<TApi extends Api = any> {
-    id: string;
-    name: string;
-    api: TApi;
-    provider: Provider;
-    baseUrl: string;
-    reasoning: boolean;
-    input: ("text" | "image")[];
-    cost: {
-        input: number;
-        output: number;
-        cacheRead: number;
-        cacheWrite: number;
-    };
-    contextWindow: number;
-    maxTokens: number;
-    headers?: Record<string, string>;
-    /** Hint that websocket transport should be preferred when supported by the provider implementation. */
-    preferWebsockets?: boolean;
-    /** Preferred model to switch to when context promotion is triggered (model id or provider/id). */
-    contextPromotionTarget?: string;
-    /** Provider-assigned priority value (lower = higher priority). */
-    priority?: number;
-    /** Compatibility overrides for openai-completions API. If not set, auto-detected from baseUrl. */
-    compat?: TApi extends "openai-completions" ? OpenAICompat : never;
+	id: string;
+	name: string;
+	api: TApi;
+	provider: Provider;
+	baseUrl: string;
+	reasoning: boolean;
+	input: ("text" | "image")[];
+	cost: {
+		input: number;
+		output: number;
+		cacheRead: number;
+		cacheWrite: number;
+	};
+	contextWindow: number;
+	maxTokens: number;
+	headers?: Record<string, string>;
+	/** Hint that websocket transport should be preferred when supported by the provider implementation. */
+	preferWebsockets?: boolean;
+	/** Preferred model to switch to when context promotion is triggered (model id or provider/id). */
+	contextPromotionTarget?: string;
+	/** Provider-assigned priority value (lower = higher priority). */
+	priority?: number;
+	/** Compatibility overrides for openai-completions API. If not set, auto-detected from baseUrl. */
+	compat?: TApi extends "openai-completions" ? OpenAICompat : never;
 }
 //# sourceMappingURL=types.d.ts.map

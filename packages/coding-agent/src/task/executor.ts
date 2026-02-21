@@ -720,6 +720,8 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				break;
 
 			case "tool_execution_start": {
+				// Skip Code Mode sub-tool events — they inflate toolCount and corrupt currentTool tracking
+				if (event.parentToolCallId) break;
 				progress.toolCount++;
 				progress.currentTool = event.toolName;
 				progress.currentToolArgs = extractToolArgsPreview(
@@ -734,6 +736,8 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			}
 
 			case "tool_execution_end": {
+				// Skip Code Mode sub-tool events
+				if (event.parentToolCallId) break;
 				if (progress.currentTool) {
 					progress.recentTools.unshift({
 						tool: progress.currentTool,

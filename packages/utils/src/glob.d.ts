@@ -1,18 +1,18 @@
 export interface GlobPathsOptions {
-    /** Base directory for glob patterns. Defaults to getProjectDir(). */
-    cwd?: string;
-    /** Glob exclusion patterns. */
-    exclude?: string[];
-    /** Abort signal to cancel the glob. */
-    signal?: AbortSignal;
-    /** Timeout in milliseconds for the glob operation. */
-    timeoutMs?: number;
-    /** Include dotfiles when true. */
-    dot?: boolean;
-    /** Only return files (skip directories). Default: true. */
-    onlyFiles?: boolean;
-    /** Respect .gitignore files when true. Walks up directory tree to find all applicable .gitignore files. */
-    gitignore?: boolean;
+	/** Base directory for glob patterns. Defaults to getProjectDir(). */
+	cwd?: string;
+	/** Glob exclusion patterns. */
+	exclude?: string[];
+	/** Abort signal to cancel the glob. */
+	signal?: AbortSignal;
+	/** Timeout in milliseconds for the glob operation. */
+	timeoutMs?: number;
+	/** Include dotfiles when true. */
+	dot?: boolean;
+	/** Only return files (skip directories). Default: true. */
+	onlyFiles?: boolean;
+	/** Respect .gitignore files when true. Walks up directory tree to find all applicable .gitignore files. */
+	gitignore?: boolean;
 }
 /**
  * Load .gitignore patterns from a directory and its parents.

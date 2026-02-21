@@ -8,7 +8,12 @@
 
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import { Type } from "@sinclair/typebox";
-import { bridgeToolFunctions, type CodeModeEventHandler, type CodeModeToolEvent, type DispatchFn } from "./event-bridge";
+import {
+	bridgeToolFunctions,
+	type CodeModeEventHandler,
+	type CodeModeToolEvent,
+	type DispatchFn,
+} from "./event-bridge";
 import { execute } from "./executor";
 import { normalizeCode } from "./normalize";
 import codeToolDescription from "./prompt.md" with { type: "text" };
@@ -18,8 +23,8 @@ const codeSchema = Type.Object({
 	code: Type.String({ description: "JavaScript async arrow function to execute using the codemode API" }),
 });
 
-/** Tools that require human interaction and should not be wrapped in Code Mode */
-const EXCLUDED_TOOLS = new Set(["ask", "report_finding", "exit_plan_mode", "submit_result"]);
+/** Tools excluded from Code Mode wrapping (interactive, orchestration, or lifecycle tools) */
+const EXCLUDED_TOOLS = new Set(["ask", "report_finding", "exit_plan_mode", "submit_result", "task"]);
 
 export interface CodeToolOptions {
 	/** Additional tool names to exclude from Code Mode */
@@ -49,7 +54,7 @@ export interface CodeModeAgentTool extends AgentTool {
  * The LLM writes code against this API instead of making individual
  * tool calls, reducing round-trips and context usage.
  *
- * Tools in EXCLUDED_TOOLS (ask, report_finding, etc.) are passed through
+ * Tools in EXCLUDED_TOOLS (ask, task, report_finding, etc.) are passed through
  * unchanged and should be registered alongside the code tool.
  *
  * @returns An object with the code tool and any excluded tools that need
@@ -82,10 +87,7 @@ export function createCodeTool(
 	// Build the dispatch functions map (sanitized name → executor).
 	// Each fn accepts (toolCallId, args) so the event bridge's ID
 	// is forwarded to tool.execute() — no duplicate ID generation.
-	const buildDispatchFns = (
-		signal?: AbortSignal,
-		ctx?: AgentToolContext,
-	): Record<string, DispatchFn> => {
+	const buildDispatchFns = (signal?: AbortSignal, ctx?: AgentToolContext): Record<string, DispatchFn> => {
 		const fns: Record<string, DispatchFn> = {};
 
 		for (const tool of wrappedTools) {
@@ -117,7 +119,7 @@ export function createCodeTool(
 			_toolCallId: string,
 			params: unknown,
 			signal?: AbortSignal,
-			onUpdate?: AgentToolUpdateCallback,
+			_onUpdate?: AgentToolUpdateCallback,
 			ctx?: AgentToolContext,
 		): Promise<AgentToolResult> {
 			const code = (params as { code: string }).code;
@@ -126,17 +128,65 @@ export function createCodeTool(
 			// Build dispatch functions
 			const rawFns = buildDispatchFns(signal, ctx);
 
-			// Wrap with event bridge — emits sub-tool events through onUpdate
+			// Build tool lookup map for sub-tool event emission
+			const toolByName = new Map<string, AgentTool>();
+			for (const tool of wrappedTools) {
+				toolByName.set(tool.name, tool);
+			}
+
 			const eventHandler: CodeModeEventHandler = event => {
 				events.push(event);
 
-				// Stream each sub-tool event through onUpdate so the TUI
-				// event controller can create real ToolExecutionComponent instances
-				if (onUpdate) {
-					onUpdate({
-						content: [{ type: "text", text: "" }],
-						details: { events, logs: [] },
-					});
+				// Emit sub-tool events directly to the agent's event stream
+				if (ctx?.emit) {
+					switch (event.type) {
+						case "tool_start":
+							ctx.emit({
+								type: "tool_execution_start",
+								toolCallId: event.toolCallId,
+								toolName: event.toolName,
+								args: event.args ?? {},
+								tool: toolByName.get(event.toolName),
+								parentToolCallId: _toolCallId,
+							});
+							break;
+						case "tool_done":
+							ctx.emit({
+								type: "tool_execution_end",
+								toolCallId: event.toolCallId,
+								toolName: event.toolName,
+								result: {
+									content:
+										event.result != null
+											? [
+													{
+														type: "text" as const,
+														text:
+															typeof event.result === "string"
+																? event.result
+																: JSON.stringify(event.result),
+													},
+												]
+											: [{ type: "text" as const, text: "(no output)" }],
+									isError: false,
+								},
+								parentToolCallId: _toolCallId,
+							});
+							break;
+						case "tool_error":
+							ctx.emit({
+								type: "tool_execution_end",
+								toolCallId: event.toolCallId,
+								toolName: event.toolName,
+								result: {
+									content: [{ type: "text" as const, text: event.error ?? "Unknown error" }],
+									isError: true,
+								},
+								isError: true,
+								parentToolCallId: _toolCallId,
+							});
+							break;
+					}
 				}
 			};
 
@@ -168,8 +218,13 @@ export function createCodeTool(
 			if (result.result !== undefined && result.result !== null) {
 				const resultStr =
 					typeof result.result === "string" ? result.result : JSON.stringify(result.result, null, 2);
-				if (resultStr.length <= 500) {
+				const MAX_RESULT_LENGTH = 4000;
+				if (resultStr.length <= MAX_RESULT_LENGTH) {
 					parts.push(resultStr);
+				} else {
+					parts.push(
+						`${resultStr.slice(0, MAX_RESULT_LENGTH)}\n... (${resultStr.length - MAX_RESULT_LENGTH} chars truncated)`,
+					);
 				}
 			}
 			if (parts.length === 0) {

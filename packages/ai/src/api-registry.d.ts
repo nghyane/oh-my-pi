@@ -5,17 +5,30 @@
  * (e.g., "vertex-claude-api") that are not built into stream.ts.
  */
 import type { Api, AssistantMessageEventStream, Context, Model, SimpleStreamOptions, StreamOptions } from "./types";
-export type CustomStreamFn = (model: Model<Api>, context: Context, options?: StreamOptions) => AssistantMessageEventStream;
-export type CustomStreamSimpleFn = (model: Model<Api>, context: Context, options?: SimpleStreamOptions) => AssistantMessageEventStream;
+export type CustomStreamFn = (
+	model: Model<Api>,
+	context: Context,
+	options?: StreamOptions,
+) => AssistantMessageEventStream;
+export type CustomStreamSimpleFn = (
+	model: Model<Api>,
+	context: Context,
+	options?: SimpleStreamOptions,
+) => AssistantMessageEventStream;
 export interface RegisteredCustomApi {
-    stream: CustomStreamFn;
-    streamSimple: CustomStreamSimpleFn;
-    sourceId?: string;
+	stream: CustomStreamFn;
+	streamSimple: CustomStreamSimpleFn;
+	sourceId?: string;
 }
 /**
  * Register a custom API streaming function.
  */
-export declare function registerCustomApi(api: string, streamSimple: CustomStreamSimpleFn, sourceId?: string, stream?: CustomStreamFn): void;
+export declare function registerCustomApi(
+	api: string,
+	streamSimple: CustomStreamSimpleFn,
+	sourceId?: string,
+	stream?: CustomStreamFn,
+): void;
 /**
  * Get a custom API provider by API identifier.
  */

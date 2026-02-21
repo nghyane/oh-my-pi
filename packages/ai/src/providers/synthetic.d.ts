@@ -11,14 +11,18 @@ import type { Api, Context, Model, SimpleStreamOptions } from "../types";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 export type SyntheticApiFormat = "openai" | "anthropic";
 export interface SyntheticOptions extends SimpleStreamOptions {
-    /** API format: "openai" or "anthropic". Default: "openai" */
-    format?: SyntheticApiFormat;
+	/** API format: "openai" or "anthropic". Default: "openai" */
+	format?: SyntheticApiFormat;
 }
 /**
  * Stream from Synthetic, routing to either OpenAI or Anthropic API based on format.
  * Returns synchronously like other providers - async processing happens internally.
  */
-export declare function streamSynthetic(model: Model<"openai-completions">, context: Context, options?: SyntheticOptions): AssistantMessageEventStream;
+export declare function streamSynthetic(
+	model: Model<"openai-completions">,
+	context: Context,
+	options?: SyntheticOptions,
+): AssistantMessageEventStream;
 /**
  * Check if a model is a Synthetic model.
  */

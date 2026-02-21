@@ -15,20 +15,20 @@
  * ```
  */
 export interface HSV {
-    /** Hue in degrees (0-360) */
-    h: number;
-    /** Saturation (0-1) */
-    s: number;
-    /** Value/brightness (0-1) */
-    v: number;
+	/** Hue in degrees (0-360) */
+	h: number;
+	/** Saturation (0-1) */
+	s: number;
+	/** Value/brightness (0-1) */
+	v: number;
 }
 export interface RGB {
-    /** Red (0-255) */
-    r: number;
-    /** Green (0-255) */
-    g: number;
-    /** Blue (0-255) */
-    b: number;
+	/** Red (0-255) */
+	r: number;
+	/** Green (0-255) */
+	g: number;
+	/** Blue (0-255) */
+	b: number;
 }
 /**
  * Parse a hex color string to RGB.
@@ -70,12 +70,12 @@ export declare function hsvToHex(hsv: HSV): string;
  */
 export declare function shiftHue(hex: string, degrees: number): string;
 export interface HSVAdjustment {
-    /** Hue shift in degrees (additive) */
-    h?: number;
-    /** Saturation multiplier */
-    s?: number;
-    /** Value/brightness multiplier */
-    v?: number;
+	/** Hue shift in degrees (additive) */
+	h?: number;
+	/** Saturation multiplier */
+	s?: number;
+	/** Value/brightness multiplier */
+	v?: number;
 }
 /**
  * Adjust HSV components of a hex color.

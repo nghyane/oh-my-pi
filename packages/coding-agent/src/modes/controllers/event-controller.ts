@@ -1,34 +1,23 @@
 import { INTENT_FIELD } from "@oh-my-pi/pi-agent-core";
-import type { CodeModeAgentTool, CodeModeToolEvent, CodeToolDetails } from "@oh-my-pi/pi-codemode";
 import { Loader, TERMINAL, Text } from "@oh-my-pi/pi-tui";
 import { settings } from "../../config/settings";
 import { AssistantMessageComponent } from "../../modes/components/assistant-message";
 import { ReadToolGroupComponent } from "../../modes/components/read-tool-group";
+import { CodeModeGroupComponent } from "../../modes/components/codemode-group";
 import { TodoReminderComponent } from "../../modes/components/todo-reminder";
-import { ToolExecutionComponent, type ToolExecutionHandle } from "../../modes/components/tool-execution";
+import { ToolExecutionComponent } from "../../modes/components/tool-execution";
 import { TtsrNotificationComponent } from "../../modes/components/ttsr-notification";
 import { getSymbolTheme, theme } from "../../modes/theme/theme";
 import type { InteractiveModeContext, TodoItem } from "../../modes/types";
 import type { AgentSessionEvent } from "../../session/agent-session";
 import type { ExitPlanModeDetails } from "../../tools";
 
-/** No-op handle for Code Mode's "code" tool — sub-tools render individually */
-const CODE_MODE_HANDLE: ToolExecutionHandle = {
-	updateArgs() {},
-	updateResult() {},
-	setArgsComplete() {},
-	setExpanded() {},
-};
-
 export class EventController {
 	#lastReadGroup: ReadToolGroupComponent | undefined = undefined;
+	#codemodeGroups = new Map<string, CodeModeGroupComponent>();
 	#lastThinkingCount = 0;
 	#renderedCustomMessages = new Set<string>();
 	#lastIntent: string | undefined = undefined;
-	/** Track how many sub-tool events we've processed for Code Mode */
-	#codeModeSeen = 0;
-	/** Cached wrapped tools map from the active Code Mode tool for sub-tool rendering */
-	#codeWrappedTools?: CodeModeAgentTool["wrappedToolMap"];
 
 	constructor(private ctx: InteractiveModeContext) {}
 
@@ -52,111 +41,6 @@ export class EventController {
 		if (!trimmed || trimmed === this.#lastIntent) return;
 		this.#lastIntent = trimmed;
 		this.ctx.setWorkingMessage(`${trimmed} (esc to interrupt)`);
-	}
-
-	/**
-	 * Code Mode: process sub-tool events from the "code" tool's onUpdate.
-	 * Creates real ToolExecutionComponent instances for each sub-tool call
-	 * so the TUI renders them identically to normal tool calls.
-	 */
-	#handleCodeModeUpdate(partialResult: { details?: unknown }): void {
-		const details = partialResult?.details as CodeToolDetails | undefined;
-		if (!details?.events) return;
-
-		const events = details.events;
-		// Only process new events since last update
-		const newEvents = events.slice(this.#codeModeSeen);
-		this.#codeModeSeen = events.length;
-
-		for (const event of newEvents) {
-			this.#handleCodeModeSubToolEvent(event);
-		}
-	}
-
-	/**
-	 * Code Mode: finalize any pending sub-tool components when the "code" tool ends.
-	 */
-	#handleCodeModeEnd(result: { details?: unknown }): void {
-		const details = result?.details as CodeToolDetails | undefined;
-		if (!details?.events) return;
-
-		// Process any remaining events not yet seen
-		const events = details.events;
-		const remaining = events.slice(this.#codeModeSeen);
-		for (const event of remaining) {
-			this.#handleCodeModeSubToolEvent(event);
-		}
-		this.#codeModeSeen = 0;
-		this.#codeWrappedTools = undefined;
-		this.ctx.ui.requestRender();
-	}
-
-	/**
-	 * Handle a single Code Mode sub-tool event by creating/updating
-	 * ToolExecutionComponent as if it were a real tool call.
-	 */
-	#handleCodeModeSubToolEvent(event: CodeModeToolEvent): void {
-		switch (event.type) {
-			case "tool_start": {
-				if (event.toolName === "read") {
-					const group = this.#getReadGroup();
-					group.updateArgs(event.args ?? {}, event.toolCallId);
-					this.ctx.pendingTools.set(event.toolCallId, group);
-					this.ctx.ui.requestRender();
-					break;
-				}
-				this.#resetReadGroup();
-				const tool = this.#codeWrappedTools?.get(event.toolName);
-				const component = new ToolExecutionComponent(
-					event.toolName,
-					event.args,
-					{
-						showImages: settings.get("terminal.showImages"),
-						editFuzzyThreshold: settings.get("edit.fuzzyThreshold"),
-						editAllowFuzzy: settings.get("edit.fuzzyMatch"),
-					},
-					tool,
-					this.ctx.ui,
-					this.ctx.sessionManager.getCwd(),
-				);
-				component.setExpanded(this.ctx.toolOutputExpanded);
-				this.ctx.chatContainer.addChild(component);
-				this.ctx.pendingTools.set(event.toolCallId, component);
-				this.ctx.ui.requestRender();
-				break;
-			}
-			case "tool_done": {
-				const component = this.ctx.pendingTools.get(event.toolCallId);
-				if (component) {
-					const content =
-						event.result != null
-							? [
-									{
-										type: "text" as const,
-										text: typeof event.result === "string" ? event.result : JSON.stringify(event.result),
-									},
-								]
-							: [{ type: "text" as const, text: "(no output)" }];
-					component.updateResult({ content, isError: false }, false, event.toolCallId);
-					this.ctx.pendingTools.delete(event.toolCallId);
-					this.ctx.ui.requestRender();
-				}
-				break;
-			}
-			case "tool_error": {
-				const component = this.ctx.pendingTools.get(event.toolCallId);
-				if (component) {
-					component.updateResult(
-						{ content: [{ type: "text", text: event.error ?? "Unknown error" }], isError: true },
-						false,
-						event.toolCallId,
-					);
-					this.ctx.pendingTools.delete(event.toolCallId);
-					this.ctx.ui.requestRender();
-				}
-				break;
-			}
-		}
 	}
 
 	subscribeToAgent(): void {
@@ -336,14 +220,45 @@ export class EventController {
 
 			case "tool_execution_start": {
 				this.#updateWorkingMessageFromIntent(event.intent);
-				// Code Mode: suppress the "code" tool component — sub-tools render individually
+				// Code Mode: create a group component for the "code" tool
 				if (event.toolName === "code") {
-					this.#codeModeSeen = 0;
-					const codeTool = this.ctx.session.getToolByName("code") as CodeModeAgentTool | undefined;
-					this.#codeWrappedTools = codeTool?.wrappedToolMap;
-					this.ctx.pendingTools.set(event.toolCallId, CODE_MODE_HANDLE);
+					this.#resetReadGroup();
+					const group = new CodeModeGroupComponent();
+					const intent = event.intent ?? (event.args as Record<string, unknown>)?.agent__intent;
+					if (typeof intent === "string" && intent.trim()) {
+						group.setIntent(intent.trim());
+					}
+					group.setExpanded(this.ctx.toolOutputExpanded);
+					this.ctx.chatContainer.addChild(group);
+					this.#codemodeGroups.set(event.toolCallId, group);
+					this.ctx.pendingTools.set(event.toolCallId, group);
+					this.ctx.ui.requestRender();
 					break;
 				}
+				// Route sub-tools into their parent codemode group
+				if (event.parentToolCallId) {
+					const parentGroup = this.#codemodeGroups.get(event.parentToolCallId);
+					if (parentGroup) {
+						const tool = event.tool ?? this.ctx.session.getToolByName(event.toolName);
+						const handle = parentGroup.addSubTool(
+							event.toolCallId,
+							event.toolName,
+							event.args,
+							tool,
+							{
+								showImages: settings.get("terminal.showImages"),
+								editFuzzyThreshold: settings.get("edit.fuzzyThreshold"),
+								editAllowFuzzy: settings.get("edit.fuzzyMatch"),
+							},
+							this.ctx.ui,
+							this.ctx.sessionManager.getCwd(),
+						);
+						this.ctx.pendingTools.set(event.toolCallId, handle);
+						this.ctx.ui.requestRender();
+						break;
+					}
+				}
+
 				if (!this.ctx.pendingTools.has(event.toolCallId)) {
 					if (event.toolName === "read") {
 						const group = this.#getReadGroup();
@@ -354,7 +269,7 @@ export class EventController {
 					}
 
 					this.#resetReadGroup();
-					const tool = this.ctx.session.getToolByName(event.toolName);
+					const tool = event.tool ?? this.ctx.session.getToolByName(event.toolName);
 					const component = new ToolExecutionComponent(
 						event.toolName,
 						event.args,
@@ -376,11 +291,6 @@ export class EventController {
 			}
 
 			case "tool_execution_update": {
-				// Code Mode: intercept updates from the "code" tool and render sub-tools
-				if (event.toolName === "code") {
-					this.#handleCodeModeUpdate(event.partialResult);
-					break;
-				}
 				const component = this.ctx.pendingTools.get(event.toolCallId);
 				if (component) {
 					component.updateResult({ ...event.partialResult, isError: false }, true, event.toolCallId);
@@ -390,17 +300,23 @@ export class EventController {
 			}
 
 			case "tool_execution_end": {
-				// Code Mode: finalize any pending sub-tool and clean up
-				if (event.toolName === "code") {
-					this.#handleCodeModeEnd(event.result);
-					this.ctx.pendingTools.delete(event.toolCallId);
-					break;
-				}
 				const component = this.ctx.pendingTools.get(event.toolCallId);
 				if (component) {
 					component.updateResult({ ...event.result, isError: event.isError }, false, event.toolCallId);
 					this.ctx.pendingTools.delete(event.toolCallId);
 					this.ctx.ui.requestRender();
+				}
+				// Code Mode: finalize the group when the "code" tool ends
+				if (event.toolName === "code") {
+					const group = this.#codemodeGroups.get(event.toolCallId);
+					if (group) {
+						const details = event.result.details as { logs?: string[] } | undefined;
+						if (details?.logs) {
+							group.setLogs(details.logs);
+						}
+						group.setDone();
+						this.#codemodeGroups.delete(event.toolCallId);
+					}
 				}
 				// Update todo display when todo_write tool completes
 				if (event.toolName === "todo_write" && !event.isError) {
@@ -438,6 +354,7 @@ export class EventController {
 				}
 				await this.ctx.flushPendingModelSwitch();
 				this.ctx.pendingTools.clear();
+				this.#codemodeGroups.clear();
 				this.ctx.ui.requestRender();
 				this.sendCompletionNotification();
 				break;

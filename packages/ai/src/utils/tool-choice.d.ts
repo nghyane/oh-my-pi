@@ -3,22 +3,37 @@
  */
 import type { ToolChoice } from "../types";
 /** OpenAI Completions API tool choice format */
-export type OpenAICompletionsToolChoice = "auto" | "none" | "required" | {
-    type: "function";
-    function: {
-        name: string;
-    };
-} | undefined;
+export type OpenAICompletionsToolChoice =
+	| "auto"
+	| "none"
+	| "required"
+	| {
+			type: "function";
+			function: {
+				name: string;
+			};
+	  }
+	| undefined;
 /** OpenAI Responses API tool choice format (flat structure) */
-export type OpenAIResponsesToolChoice = "auto" | "none" | "required" | {
-    type: "function";
-    name: string;
-} | undefined;
+export type OpenAIResponsesToolChoice =
+	| "auto"
+	| "none"
+	| "required"
+	| {
+			type: "function";
+			name: string;
+	  }
+	| undefined;
 /** Anthropic-compatible tool choice format */
-export type AnthropicToolChoice = "auto" | "none" | "any" | {
-    type: "tool";
-    name: string;
-} | undefined;
+export type AnthropicToolChoice =
+	| "auto"
+	| "none"
+	| "any"
+	| {
+			type: "tool";
+			name: string;
+	  }
+	| undefined;
 /**
  * Map unified ToolChoice to OpenAI Completions API format.
  * - "any" → "required"

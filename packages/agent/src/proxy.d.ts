@@ -2,64 +2,84 @@
  * Proxy stream function for apps that route LLM calls through a server.
  * The server manages auth and proxies requests to LLM providers.
  */
-import { type AssistantMessage, type AssistantMessageEvent, type Context, EventStream, type Model, type SimpleStreamOptions, type StopReason } from "@oh-my-pi/pi-ai";
+import {
+	type AssistantMessage,
+	type AssistantMessageEvent,
+	type Context,
+	EventStream,
+	type Model,
+	type SimpleStreamOptions,
+	type StopReason,
+} from "@oh-my-pi/pi-ai";
 declare class ProxyMessageEventStream extends EventStream<AssistantMessageEvent, AssistantMessage> {
-    constructor();
+	constructor();
 }
 /**
  * Proxy event types - server sends these with partial field stripped to reduce bandwidth.
  */
-export type ProxyAssistantMessageEvent = {
-    type: "start";
-} | {
-    type: "text_start";
-    contentIndex: number;
-} | {
-    type: "text_delta";
-    contentIndex: number;
-    delta: string;
-} | {
-    type: "text_end";
-    contentIndex: number;
-    contentSignature?: string;
-} | {
-    type: "thinking_start";
-    contentIndex: number;
-} | {
-    type: "thinking_delta";
-    contentIndex: number;
-    delta: string;
-} | {
-    type: "thinking_end";
-    contentIndex: number;
-    contentSignature?: string;
-} | {
-    type: "toolcall_start";
-    contentIndex: number;
-    id: string;
-    toolName: string;
-} | {
-    type: "toolcall_delta";
-    contentIndex: number;
-    delta: string;
-} | {
-    type: "toolcall_end";
-    contentIndex: number;
-} | {
-    type: "done";
-    reason: Extract<StopReason, "stop" | "length" | "toolUse">;
-    usage: AssistantMessage["usage"];
-} | {
-    type: "error";
-    reason: Extract<StopReason, "aborted" | "error">;
-    errorMessage?: string;
-    usage: AssistantMessage["usage"];
-};
+export type ProxyAssistantMessageEvent =
+	| {
+			type: "start";
+	  }
+	| {
+			type: "text_start";
+			contentIndex: number;
+	  }
+	| {
+			type: "text_delta";
+			contentIndex: number;
+			delta: string;
+	  }
+	| {
+			type: "text_end";
+			contentIndex: number;
+			contentSignature?: string;
+	  }
+	| {
+			type: "thinking_start";
+			contentIndex: number;
+	  }
+	| {
+			type: "thinking_delta";
+			contentIndex: number;
+			delta: string;
+	  }
+	| {
+			type: "thinking_end";
+			contentIndex: number;
+			contentSignature?: string;
+	  }
+	| {
+			type: "toolcall_start";
+			contentIndex: number;
+			id: string;
+			toolName: string;
+	  }
+	| {
+			type: "toolcall_delta";
+			contentIndex: number;
+			delta: string;
+	  }
+	| {
+			type: "toolcall_end";
+			contentIndex: number;
+	  }
+	| {
+			type: "done";
+			reason: Extract<StopReason, "stop" | "length" | "toolUse">;
+			usage: AssistantMessage["usage"];
+	  }
+	| {
+			type: "error";
+			reason: Extract<StopReason, "aborted" | "error">;
+			errorMessage?: string;
+			usage: AssistantMessage["usage"];
+	  };
 export interface ProxyStreamOptions extends SimpleStreamOptions {
-    /** Auth token for the proxy server */
-    authToken: string;
-    /** Proxy server URL (e.g., "https://genai.example.com") */
-    proxyUrl: string;
+	/** Auth token for the proxy server */
+	authToken: string;
+	/** Proxy server URL (e.g., "https://genai.example.com") */
+	proxyUrl: string;
 }
 /**
  * Stream function that proxies through a server instead of calling LLM providers directly.
@@ -80,6 +100,9 @@ export interface ProxyStreamOptions extends SimpleStreamOptions {
  * });
  * ```
  */
-export declare function streamProxy(model: Model, context: Context, options: ProxyStreamOptions): ProxyMessageEventStream;
-export {};
+export declare function streamProxy(
+	model: Model,
+	context: Context,
+	options: ProxyStreamOptions,
+): ProxyMessageEventStream;
 //# sourceMappingURL=proxy.d.ts.map

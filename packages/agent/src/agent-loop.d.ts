@@ -8,7 +8,13 @@ import type { AgentContext, AgentEvent, AgentLoopConfig, AgentMessage, StreamFn 
  * Start an agent loop with a new prompt message.
  * The prompt is added to the context and events are emitted for it.
  */
-export declare function agentLoop(prompts: AgentMessage[], context: AgentContext, config: AgentLoopConfig, signal?: AbortSignal, streamFn?: StreamFn): EventStream<AgentEvent, AgentMessage[]>;
+export declare function agentLoop(
+	prompts: AgentMessage[],
+	context: AgentContext,
+	config: AgentLoopConfig,
+	signal?: AbortSignal,
+	streamFn?: StreamFn,
+): EventStream<AgentEvent, AgentMessage[]>;
 /**
  * Continue an agent loop from the current context without adding a new message.
  * Used for retries - context already has user message or tool results.
@@ -17,6 +23,11 @@ export declare function agentLoop(prompts: AgentMessage[], context: AgentContext
  * via `convertToLlm`. If it doesn't, the LLM provider will reject the request.
  * This cannot be validated here since `convertToLlm` is only called once per turn.
  */
-export declare function agentLoopContinue(context: AgentContext, config: AgentLoopConfig, signal?: AbortSignal, streamFn?: StreamFn): EventStream<AgentEvent, AgentMessage[]>;
+export declare function agentLoopContinue(
+	context: AgentContext,
+	config: AgentLoopConfig,
+	signal?: AbortSignal,
+	streamFn?: StreamFn,
+): EventStream<AgentEvent, AgentMessage[]>;
 export declare const INTENT_FIELD = "agent__intent";
 //# sourceMappingURL=agent-loop.d.ts.map

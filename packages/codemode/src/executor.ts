@@ -86,6 +86,7 @@ export async function execute(
 	};
 
 	const cleanups: (() => void)[] = [];
+	let resultPromise: Promise<unknown> | undefined;
 	try {
 		// Build an async function that receives codemode and console as params.
 		// Shadow dangerous globals (process, require, Bun, globalThis, global)
@@ -101,7 +102,7 @@ export async function execute(
 			`const __fn = ${code};\nreturn await __fn();`,
 		);
 
-		const resultPromise = fn(codemode, sandboxConsole, undefined, undefined, undefined, undefined, undefined);
+		resultPromise = fn(codemode, sandboxConsole, undefined, undefined, undefined, undefined, undefined);
 
 		// Race against timeout and abort
 		const timeout = createTimeout(timeoutMs);
@@ -123,9 +124,7 @@ export async function execute(
 		// Suppress unhandled rejection from the still-running resultPromise.
 		// The code may still be executing in-flight tool calls after timeout/abort;
 		// swallowing the rejection prevents Node/Bun from crashing.
-		// Note: we cannot cancel the in-flight work since AsyncFunction has no
-		// cancellation primitive — the external abort signal passed to tool.execute()
-		// handles cooperative cancellation at the tool level.
+		resultPromise?.catch(() => {});
 		return { result: undefined, logs, error };
 	} finally {
 		for (const cleanup of cleanups) cleanup();

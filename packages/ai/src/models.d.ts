@@ -18,5 +18,8 @@ export declare function supportsXhigh<TApi extends Api>(model: Model<TApi>): boo
  * Check if two models are equal by comparing both their id and provider.
  * Returns false if either model is null or undefined.
  */
-export declare function modelsAreEqual<TApi extends Api>(a: Model<TApi> | null | undefined, b: Model<TApi> | null | undefined): boolean;
+export declare function modelsAreEqual<TApi extends Api>(
+	a: Model<TApi> | null | undefined,
+	b: Model<TApi> | null | undefined,
+): boolean;
 //# sourceMappingURL=models.d.ts.map

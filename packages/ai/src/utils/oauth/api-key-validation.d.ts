@@ -1,15 +1,15 @@
 type OpenAICompatibleValidationOptions = {
-    provider: string;
-    apiKey: string;
-    baseUrl: string;
-    model: string;
-    signal?: AbortSignal;
+	provider: string;
+	apiKey: string;
+	baseUrl: string;
+	model: string;
+	signal?: AbortSignal;
 };
 type ModelListValidationOptions = {
-    provider: string;
-    apiKey: string;
-    modelsUrl: string;
-    signal?: AbortSignal;
+	provider: string;
+	apiKey: string;
+	modelsUrl: string;
+	signal?: AbortSignal;
 };
 /**
  * Validate an API key against an OpenAI-compatible chat completions endpoint.
@@ -24,5 +24,4 @@ export declare function validateOpenAICompatibleApiKey(options: OpenAICompatible
  * should not block key validation.
  */
 export declare function validateApiKeyAgainstModelsEndpoint(options: ModelListValidationOptions): Promise<void>;
-export {};
 //# sourceMappingURL=api-key-validation.d.ts.map

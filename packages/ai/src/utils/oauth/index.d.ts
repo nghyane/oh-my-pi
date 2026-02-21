@@ -1,4 +1,10 @@
-import type { OAuthCredentials, OAuthProvider, OAuthProviderId, OAuthProviderInfo, OAuthProviderInterface } from "./types";
+import type {
+	OAuthCredentials,
+	OAuthProvider,
+	OAuthProviderId,
+	OAuthProviderInfo,
+	OAuthProviderInterface,
+} from "./types";
 /**
  * OAuth credential management for AI providers.
  *
@@ -21,8 +27,19 @@ import type { OAuthCredentials, OAuthProvider, OAuthProviderId, OAuthProviderInf
 export { loginAnthropic, refreshAnthropicToken } from "./anthropic";
 export { loginCerebras } from "./cerebras";
 export { loginCloudflareAiGateway } from "./cloudflare-ai-gateway";
-export { generateCursorAuthParams, isTokenExpiringSoon as isCursorTokenExpiringSoon, loginCursor, pollCursorAuth, refreshCursorToken, } from "./cursor";
-export { getGitHubCopilotBaseUrl, loginGitHubCopilot, normalizeDomain, refreshGitHubCopilotToken, } from "./github-copilot";
+export {
+	generateCursorAuthParams,
+	isTokenExpiringSoon as isCursorTokenExpiringSoon,
+	loginCursor,
+	pollCursorAuth,
+	refreshCursorToken,
+} from "./cursor";
+export {
+	getGitHubCopilotBaseUrl,
+	loginGitHubCopilot,
+	normalizeDomain,
+	refreshGitHubCopilotToken,
+} from "./github-copilot";
 export { loginAntigravity, refreshAntigravityToken } from "./google-antigravity";
 export { loginGeminiCli, refreshGoogleCloudToken } from "./google-gemini-cli";
 export { loginHuggingface } from "./huggingface";
@@ -62,7 +79,10 @@ export declare function unregisterOAuthProviders(sourceId: string): void;
  * Refresh token for any OAuth provider.
  * Saves the new credentials and returns the new access token.
  */
-export declare function refreshOAuthToken(provider: OAuthProvider, credentials: OAuthCredentials): Promise<OAuthCredentials>;
+export declare function refreshOAuthToken(
+	provider: OAuthProvider,
+	credentials: OAuthCredentials,
+): Promise<OAuthCredentials>;
 /**
  * Get API key for a provider from OAuth credentials.
  * Automatically refreshes expired tokens.
@@ -72,9 +92,12 @@ export declare function refreshOAuthToken(provider: OAuthProvider, credentials: 
  * @returns API key string, or null if no credentials
  * @throws Error if refresh fails
  */
-export declare function getOAuthApiKey(provider: OAuthProvider, credentials: Record<string, OAuthCredentials>): Promise<{
-    newCredentials: OAuthCredentials;
-    apiKey: string;
+export declare function getOAuthApiKey(
+	provider: OAuthProvider,
+	credentials: Record<string, OAuthCredentials>,
+): Promise<{
+	newCredentials: OAuthCredentials;
+	apiKey: string;
 } | null>;
 /**
  * Get list of OAuth providers.

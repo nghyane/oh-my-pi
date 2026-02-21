@@ -12,14 +12,18 @@ import type { Api, Context, Model, SimpleStreamOptions } from "../types";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 export type KimiApiFormat = "openai" | "anthropic";
 export interface KimiOptions extends SimpleStreamOptions {
-    /** API format: "openai" or "anthropic". Default: "anthropic" */
-    format?: KimiApiFormat;
+	/** API format: "openai" or "anthropic". Default: "anthropic" */
+	format?: KimiApiFormat;
 }
 /**
  * Stream from Kimi Code, routing to either OpenAI or Anthropic API based on format.
  * Returns synchronously like other providers - async header fetching happens internally.
  */
-export declare function streamKimi(model: Model<"openai-completions">, context: Context, options?: KimiOptions): AssistantMessageEventStream;
+export declare function streamKimi(
+	model: Model<"openai-completions">,
+	context: Context,
+	options?: KimiOptions,
+): AssistantMessageEventStream;
 /**
  * Check if a model is a Kimi Code model.
  */

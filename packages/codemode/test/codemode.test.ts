@@ -1,8 +1,8 @@
-import { describe, test, expect } from "bun:test";
-import { normalizeCode } from "../src/normalize";
-import { sanitizeToolName } from "../src/type-generator";
-import { jsonSchemaToTypeScript } from "../src/schema-to-ts";
+import { describe, expect, test } from "bun:test";
 import { execute } from "../src/executor";
+import { normalizeCode } from "../src/normalize";
+import { jsonSchemaToTypeScript } from "../src/schema-to-ts";
+import { sanitizeToolName } from "../src/type-generator";
 
 describe("normalizeCode", () => {
 	test("empty string → async () => {}", () => {
@@ -146,7 +146,7 @@ describe("normalizeCode", () => {
 		const result = normalizeCode(code);
 		expect(result).toContain("const x = 1;");
 		expect(result).toContain("return x;");
-		expect(result).not.toContain("\`\`\`");
+		expect(result).not.toContain("```");
 	});
 });
 
@@ -187,11 +187,13 @@ describe("sanitizeToolName", () => {
 describe("generateTypes", () => {
 	test("digit-prefixed tool produces valid type name", async () => {
 		const { generateTypes } = await import("../src/type-generator");
-		const tools = [{
-			name: "123tool",
-			parameters: { type: "object", properties: {} },
-			execute: async () => ({ content: [] }),
-		}] as any;
+		const tools = [
+			{
+				name: "123tool",
+				parameters: { type: "object", properties: {} },
+				execute: async () => ({ content: [] }),
+			},
+		] as any;
 		const { declarations } = generateTypes(tools);
 		expect(declarations).not.toMatch(/^interface \d/m);
 		expect(declarations).not.toMatch(/^type \d/m);
@@ -314,7 +316,7 @@ describe("execute", () => {
 
 	test("tool dispatch via codemode proxy", async () => {
 		const mockFn = async (args: Record<string, unknown>) => ({ echoed: args });
-		const result = await execute('async () => { return await codemode.myTool({ x: 1 }); }', { myTool: mockFn });
+		const result = await execute("async () => { return await codemode.myTool({ x: 1 }); }", { myTool: mockFn });
 		expect(result.result).toEqual({ echoed: { x: 1 } });
 	});
 
@@ -350,19 +352,13 @@ describe("execute", () => {
 	});
 
 	test("proxy handles symbol keys and 'then' safely", async () => {
-		const result = await execute(
-			"async () => { const c = codemode; return typeof c.then; }",
-			{},
-		);
+		const result = await execute("async () => { const c = codemode; return typeof c.then; }", {});
 		expect(result.result).toBe("undefined");
 		expect(result.error).toBeUndefined();
 	});
 
 	test("shadowed globals", async () => {
-		const result = await execute(
-			"async () => { return { proc: typeof process, bun: typeof Bun }; }",
-			{},
-		);
+		const result = await execute("async () => { return { proc: typeof process, bun: typeof Bun }; }", {});
 		expect(result.result).toEqual({ proc: "undefined", bun: "undefined" });
 	});
 });

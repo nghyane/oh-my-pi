@@ -16,10 +16,10 @@
  * ```
  */
 export interface FsError extends Error {
-    code: string;
-    errno?: number;
-    syscall?: string;
-    path?: string;
+	code: string;
+	errno?: number;
+	syscall?: string;
+	path?: string;
 }
 export declare function isFsError(err: unknown): err is FsError;
 export declare function isEnoent(err: unknown): err is FsError;

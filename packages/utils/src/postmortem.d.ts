@@ -1,12 +1,12 @@
 export declare enum Reason {
-    PRE_EXIT = "pre_exit",
-    EXIT = "exit",
-    SIGINT = "sigint",
-    SIGTERM = "sigterm",
-    SIGHUP = "sighup",
-    UNCAUGHT_EXCEPTION = "uncaught_exception",
-    UNHANDLED_REJECTION = "unhandled_rejection",
-    MANUAL = "manual"
+	PRE_EXIT = "pre_exit",
+	EXIT = "exit",
+	SIGINT = "sigint",
+	SIGTERM = "sigterm",
+	SIGHUP = "sighup",
+	UNCAUGHT_EXCEPTION = "uncaught_exception",
+	UNHANDLED_REJECTION = "unhandled_rejection",
+	MANUAL = "manual",
 }
 /**
  * Register a process cleanup callback, to be run on shutdown, signal, or fatal error.
