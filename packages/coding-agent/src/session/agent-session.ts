@@ -79,13 +79,9 @@ import { ExtensionToolWrapper } from "../extensibility/extensions/wrapper";
 import type { HookCommandContext } from "../extensibility/hooks/types";
 import type { Skill, SkillWarning } from "../extensibility/skills";
 import { expandSlashCommand, type FileSlashCommand } from "../extensibility/slash-commands";
-import { resolvePlanUrlToPath } from "../internal-urls";
 import { executePython as executePythonCommand, type PythonResult } from "../ipy/executor";
 import { getCurrentThemeName, theme } from "../modes/theme/theme";
 import { normalizeDiff, normalizeToLF, ParseError, previewPatch, stripBom } from "../patch";
-import type { PlanModeState } from "../plan-mode/state";
-import planModeActivePrompt from "../prompts/system/plan-mode-active.md" with { type: "text" };
-import planModeReferencePrompt from "../prompts/system/plan-mode-reference.md" with { type: "text" };
 import ttsrInterruptTemplate from "../prompts/system/ttsr-interrupt.md" with { type: "text" };
 import type { SecretObfuscator } from "../secrets/obfuscator";
 import { closeAllConnections } from "../ssh/connection-manager";
@@ -300,8 +296,6 @@ export class AgentSession {
 	#followUpMessages: string[] = [];
 	/** Messages queued to be included with the next user prompt as context ("asides"). */
 	#pendingNextTurnMessages: CustomMessage[] = [];
-	#planModeState: PlanModeState | undefined;
-	#planReferenceSent = false;
 
 	// Compaction state
 	#compactionAbortController: AbortController | undefined = undefined;
@@ -1449,39 +1443,6 @@ export class AgentSession {
 		return this.#scopedModels;
 	}
 
-	/** Prompt templates */
-	getPlanModeState(): PlanModeState | undefined {
-		return this.#planModeState;
-	}
-
-	setPlanModeState(state: PlanModeState | undefined): void {
-		this.#planModeState = state;
-		if (state?.enabled) {
-			this.#planReferenceSent = false;
-		}
-	}
-
-	markPlanReferenceSent(): void {
-		this.#planReferenceSent = true;
-	}
-
-	/**
-	 * Inject the plan mode context message into the conversation history.
-	 */
-	async sendPlanModeContext(options?: { deliverAs?: "steer" | "followUp" | "nextTurn" }): Promise<void> {
-		const message = await this.#buildPlanModeMessage();
-		if (!message) return;
-		await this.sendCustomMessage(
-			{
-				customType: message.customType,
-				content: message.content,
-				display: message.display,
-				details: message.details,
-			},
-			options ? { deliverAs: options.deliverAs } : undefined,
-		);
-	}
-
 	resolveRoleModel(role: ModelRole): Model | undefined {
 		return this.#resolveRoleModel(role, this.#modelRegistry.getAvailable(), this.model);
 	}
@@ -1503,86 +1464,6 @@ export class AgentSession {
 	// =========================================================================
 	// Prompting
 	// =========================================================================
-
-	/**
-	 * Build a plan mode message.
-	 * Returns null if plan mode is not enabled.
-	 * @returns The plan mode message, or null if plan mode is not enabled.
-	 */
-	async #buildPlanReferenceMessage(): Promise<CustomMessage | null> {
-		if (this.#planModeState?.enabled) return null;
-		if (this.#planReferenceSent) return null;
-
-		const planFilePath = `plan://${this.sessionManager.getSessionId()}/plan.md`;
-		const resolvedPlanPath = resolvePlanUrlToPath(planFilePath, {
-			getPlansDirectory: () => this.settings.getPlansDirectory(),
-			cwd: this.sessionManager.getCwd(),
-		});
-		let planContent: string;
-		try {
-			planContent = await Bun.file(resolvedPlanPath).text();
-		} catch (error) {
-			if (isEnoent(error)) {
-				return null;
-			}
-			throw error;
-		}
-
-		const content = renderPromptTemplate(planModeReferencePrompt, {
-			planFilePath,
-			planContent,
-		});
-
-		this.#planReferenceSent = true;
-
-		return {
-			role: "custom",
-			customType: "plan-mode-reference",
-			content,
-			display: false,
-			timestamp: Date.now(),
-		};
-	}
-
-	async #buildPlanModeMessage(): Promise<CustomMessage | null> {
-		const state = this.#planModeState;
-		if (!state?.enabled) return null;
-		const sessionPlanUrl = `plan://${this.sessionManager.getSessionId()}/plan.md`;
-		const resolvedPlanPath = state.planFilePath.startsWith("plan://")
-			? resolvePlanUrlToPath(state.planFilePath, {
-					getPlansDirectory: () => this.settings.getPlansDirectory(),
-					cwd: this.sessionManager.getCwd(),
-				})
-			: resolveToCwd(state.planFilePath, this.sessionManager.getCwd());
-		const resolvedSessionPlan = resolvePlanUrlToPath(sessionPlanUrl, {
-			getPlansDirectory: () => this.settings.getPlansDirectory(),
-			cwd: this.sessionManager.getCwd(),
-		});
-		const displayPlanPath =
-			state.planFilePath.startsWith("plan://") || resolvedPlanPath !== resolvedSessionPlan
-				? state.planFilePath
-				: sessionPlanUrl;
-
-		const planExists = fs.existsSync(resolvedPlanPath);
-		const content = renderPromptTemplate(planModeActivePrompt, {
-			planFilePath: displayPlanPath,
-			planExists,
-			askToolName: "ask",
-			writeToolName: "write",
-			editToolName: "edit",
-			exitToolName: "exit_plan_mode",
-			reentry: state.reentry ?? false,
-			iterative: state.workflow === "iterative",
-		});
-
-		return {
-			role: "custom",
-			customType: "plan-mode-context",
-			content,
-			display: false,
-			timestamp: Date.now(),
-		};
-	}
 
 	/**
 	 * Send a prompt to the agent.
@@ -1725,14 +1606,6 @@ export class AgentSession {
 
 			// Build messages array (custom messages if any, then user message)
 			const messages: AgentMessage[] = [];
-			const planReferenceMessage = await this.#buildPlanReferenceMessage?.();
-			if (planReferenceMessage) {
-				messages.push(planReferenceMessage);
-			}
-			const planModeMessage = await this.#buildPlanModeMessage();
-			if (planModeMessage) {
-				messages.push(planModeMessage);
-			}
 
 			messages.push(message);
 
@@ -2202,7 +2075,6 @@ export class AgentSession {
 		this.sessionManager.appendThinkingLevelChange(this.thinkingLevel);
 
 		this.#todoReminderCount = 0;
-		this.#planReferenceSent = false;
 		this.#reconnectToAgent();
 
 		// Emit session_switch event with reason "new" to hooks

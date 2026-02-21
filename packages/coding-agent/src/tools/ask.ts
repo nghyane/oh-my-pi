@@ -281,12 +281,9 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 
 		const { ui } = context;
 
-		// Determine timeout based on settings and plan mode
-		const planModeEnabled = this.session.getPlanModeState?.()?.enabled ?? false;
 		// Settings.get("ask.timeout") returns seconds (0 = disabled), convert to ms
 		const timeoutSeconds = this.session.settings.get("ask.timeout");
-		const settingsTimeout = timeoutSeconds === 0 ? null : timeoutSeconds * 1000;
-		const timeout = planModeEnabled ? null : settingsTimeout;
+		const timeout = timeoutSeconds === 0 ? null : timeoutSeconds * 1000;
 
 		// Send notification if waiting and not suppressed
 		this.#sendAskNotification();

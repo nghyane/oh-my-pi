@@ -1,4 +1,3 @@
-import type { Component } from "@oh-my-pi/pi-tui";
 import { Container, Text } from "@oh-my-pi/pi-tui";
 import { theme } from "../../modes/theme/theme";
 import { shortenPath } from "../../tools/render-utils";
@@ -66,10 +65,6 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 
 	setExpanded(_expanded: boolean): void {
 		this.#updateDisplay();
-	}
-
-	getComponent(): Component {
-		return this;
 	}
 
 	#updateDisplay(): void {

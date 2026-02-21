@@ -66,6 +66,17 @@
 
 ## Highlights
 
+### + Code Mode (Tool Orchestration via Code Generation)
+
+Replace sequential tool-calling with LLM-generated JavaScript for parallel, multi-step operations:
+
+- **Single round-trip**: LLM writes one async JS function that orchestrates multiple tools, eliminating context re-sends
+- **Parallel execution**: `Promise.all()` for independent operations (read 5 files in one call instead of 5 round trips)
+- **Typed API**: Auto-generated TypeScript declarations from tool schemas, injected into the tool description
+- **Transparent rendering**: Sub-tool calls render individually in the TUI (bash boxes, read groups, grep results) as if called normally
+- **Sandboxed execution**: Runs via `AsyncFunction` with common globals shadowed; not a security boundary but guides LLM toward the codemode API
+- Toggle via Settings > Agent > Code Mode (enabled by default)
+
 ### + Commit Tool (AI-Powered Git Commits)
 
 AI-powered conventional commit generation with intelligent change analysis:
@@ -1271,6 +1282,7 @@ For architecture and contribution guidelines, see [packages/coding-agent/DEVELOP
 | --------------------------------------------------------- | -------------------------------------------------------------------------- |
 | **[@oh-my-pi/pi-ai](packages/ai)**                        | Multi-provider LLM client with streaming and model/provider integration    |
 | **[@oh-my-pi/pi-agent-core](packages/agent)**             | Agent runtime with tool calling and state management                       |
+| **[@oh-my-pi/pi-codemode](packages/codemode)**            | Code Mode: LLM writes JS to orchestrate tools in a single round-trip      |
 | **[@oh-my-pi/pi-coding-agent](packages/coding-agent)**    | Interactive coding agent CLI and SDK                                       |
 | **[@oh-my-pi/pi-tui](packages/tui)**                      | Terminal UI library with differential rendering                            |
 | **[@oh-my-pi/pi-natives](packages/natives)**              | N-API bindings for grep, shell, image, text, syntax highlighting, and more |

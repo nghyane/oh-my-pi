@@ -2,6 +2,7 @@ import { INTENT_FIELD } from "@oh-my-pi/pi-agent-core";
 import { Loader, TERMINAL, Text } from "@oh-my-pi/pi-tui";
 import { settings } from "../../config/settings";
 import { AssistantMessageComponent } from "../../modes/components/assistant-message";
+import { CodeModeGroupComponent } from "../../modes/components/codemode-group";
 import { ReadToolGroupComponent } from "../../modes/components/read-tool-group";
 import { TodoReminderComponent } from "../../modes/components/todo-reminder";
 import { ToolExecutionComponent } from "../../modes/components/tool-execution";
@@ -9,10 +10,10 @@ import { TtsrNotificationComponent } from "../../modes/components/ttsr-notificat
 import { getSymbolTheme, theme } from "../../modes/theme/theme";
 import type { InteractiveModeContext, TodoItem } from "../../modes/types";
 import type { AgentSessionEvent } from "../../session/agent-session";
-import type { ExitPlanModeDetails } from "../../tools";
 
 export class EventController {
 	#lastReadGroup: ReadToolGroupComponent | undefined = undefined;
+	#codemodeGroups = new Map<string, CodeModeGroupComponent>();
 	#lastThinkingCount = 0;
 	#renderedCustomMessages = new Set<string>();
 	#lastIntent: string | undefined = undefined;
@@ -131,6 +132,8 @@ export class EventController {
 
 					for (const content of this.ctx.streamingMessage.content) {
 						if (content.type !== "toolCall") continue;
+						// Code Mode: suppress streaming render for "code" tool
+						if (content.name === "code") continue;
 
 						if (!this.ctx.pendingTools.has(content.id)) {
 							if (content.name === "read") {
@@ -203,7 +206,7 @@ export class EventController {
 						this.ctx.streamingMessage.stopReason !== "error"
 					) {
 						for (const [toolCallId, component] of this.ctx.pendingTools.entries()) {
-							component.setArgsComplete(toolCallId);
+							component?.setArgsComplete(toolCallId);
 						}
 					}
 					this.ctx.streamingComponent = undefined;
@@ -216,6 +219,45 @@ export class EventController {
 
 			case "tool_execution_start": {
 				this.#updateWorkingMessageFromIntent(event.intent);
+				// Code Mode: create a group component for the "code" tool
+				if (event.toolName === "code") {
+					this.#resetReadGroup();
+					const group = new CodeModeGroupComponent();
+					const intent = event.intent ?? (event.args as Record<string, unknown>)?.agent__intent;
+					if (typeof intent === "string" && intent.trim()) {
+						group.setIntent(intent.trim());
+					}
+					group.setExpanded(this.ctx.toolOutputExpanded);
+					this.ctx.chatContainer.addChild(group);
+					this.#codemodeGroups.set(event.toolCallId, group);
+					this.ctx.pendingTools.set(event.toolCallId, group);
+					this.ctx.ui.requestRender();
+					break;
+				}
+				// Route sub-tools into their parent codemode group
+				if (event.parentToolCallId) {
+					const parentGroup = this.#codemodeGroups.get(event.parentToolCallId);
+					if (parentGroup) {
+						const tool = event.tool ?? this.ctx.session.getToolByName(event.toolName);
+						const handle = parentGroup.addSubTool(
+							event.toolCallId,
+							event.toolName,
+							event.args,
+							tool,
+							{
+								showImages: settings.get("terminal.showImages"),
+								editFuzzyThreshold: settings.get("edit.fuzzyThreshold"),
+								editAllowFuzzy: settings.get("edit.fuzzyMatch"),
+							},
+							this.ctx.ui,
+							this.ctx.sessionManager.getCwd(),
+						);
+						this.ctx.pendingTools.set(event.toolCallId, handle);
+						this.ctx.ui.requestRender();
+						break;
+					}
+				}
+
 				if (!this.ctx.pendingTools.has(event.toolCallId)) {
 					if (event.toolName === "read") {
 						const group = this.#getReadGroup();
@@ -226,7 +268,7 @@ export class EventController {
 					}
 
 					this.#resetReadGroup();
-					const tool = this.ctx.session.getToolByName(event.toolName);
+					const tool = event.tool ?? this.ctx.session.getToolByName(event.toolName);
 					const component = new ToolExecutionComponent(
 						event.toolName,
 						event.args,
@@ -263,6 +305,18 @@ export class EventController {
 					this.ctx.pendingTools.delete(event.toolCallId);
 					this.ctx.ui.requestRender();
 				}
+				// Code Mode: finalize the group when the "code" tool ends
+				if (event.toolName === "code") {
+					const group = this.#codemodeGroups.get(event.toolCallId);
+					if (group) {
+						const details = event.result.details as { logs?: string[] } | undefined;
+						if (details?.logs) {
+							group.setLogs(details.logs);
+						}
+						group.setDone();
+						this.#codemodeGroups.delete(event.toolCallId);
+					}
+				}
 				// Update todo display when todo_write tool completes
 				if (event.toolName === "todo_write" && !event.isError) {
 					const details = event.result.details as { todos?: TodoItem[] } | undefined;
@@ -276,12 +330,6 @@ export class EventController {
 					this.ctx.showWarning(
 						`Todo update failed${textContent ? `: ${textContent}` : ". Progress may be stale until todo_write succeeds."}`,
 					);
-				}
-				if (event.toolName === "exit_plan_mode" && !event.isError) {
-					const details = event.result.details as ExitPlanModeDetails | undefined;
-					if (details) {
-						await this.ctx.handleExitPlanModeTool(details);
-					}
 				}
 				break;
 			}
@@ -297,8 +345,8 @@ export class EventController {
 					this.ctx.streamingComponent = undefined;
 					this.ctx.streamingMessage = undefined;
 				}
-				await this.ctx.flushPendingModelSwitch();
 				this.ctx.pendingTools.clear();
+				this.#codemodeGroups.clear();
 				this.ctx.ui.requestRender();
 				this.sendCompletionNotification();
 				break;

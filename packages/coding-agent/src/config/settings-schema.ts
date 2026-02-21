@@ -60,7 +60,6 @@ export const TAB_METADATA: Record<SettingTab, { label: string; icon: `tab.${stri
 export type StatusLineSegmentId =
 	| "pi"
 	| "model"
-	| "plan_mode"
 	| "path"
 	| "git"
 	| "subagents"
@@ -735,6 +734,18 @@ export const SETTINGS_SCHEMA = {
 	},
 
 	// ─────────────────────────────────────────────────────────────────────────
+	// Code Mode settings
+	// ─────────────────────────────────────────────────────────────────────────
+	"codemode.enabled": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "agent",
+			label: "Code Mode",
+			description: "Replace tool-calling with code generation (LLM writes JS to orchestrate tools)",
+		},
+	},
+
 	// Bash interceptor settings
 	// ─────────────────────────────────────────────────────────────────────────
 	"bash.virtualTerminal": {

@@ -72,21 +72,6 @@ const modelSegment: StatusLineSegment = {
 	},
 };
 
-const planModeSegment: StatusLineSegment = {
-	id: "plan_mode",
-	render(ctx) {
-		const status = ctx.planMode;
-		if (!status || (!status.enabled && !status.paused)) {
-			return { content: "", visible: false };
-		}
-
-		const label = status.paused ? "Plan ⏸" : "Plan";
-		const content = withIcon(theme.icon.plan, label);
-		const color = status.paused ? "warning" : "accent";
-		return { content: theme.fg(color, content), visible: true };
-	},
-};
-
 const pathSegment: StatusLineSegment = {
 	id: "path",
 	render(ctx) {
@@ -339,7 +324,6 @@ const cacheWriteSegment: StatusLineSegment = {
 export const SEGMENTS: Record<StatusLineSegmentId, StatusLineSegment> = {
 	pi: piSegment,
 	model: modelSegment,
-	plan_mode: planModeSegment,
 	path: pathSegment,
 	git: gitSegment,
 	subagents: subagentsSegment,

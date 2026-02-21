@@ -363,7 +363,6 @@ export class CommandController {
 
 	handleHotkeysCommand(): void {
 		const expandToolsKey = this.ctx.keybindings.getDisplayString("expandTools") || "Ctrl+O";
-		const planModeKey = this.ctx.keybindings.getDisplayString("togglePlanMode") || "Alt+Shift+P";
 		const sttKey = this.ctx.keybindings.getDisplayString("toggleSTT") || "Alt+H";
 		const hotkeys = `
 **Navigation**
@@ -396,7 +395,6 @@ export class CommandController {
 | \`Shift+Ctrl+P\` | Cycle role models (temporary) |
 | \`Alt+P\` | Select model (temporary) |
 | \`Ctrl+L\` | Select model (set roles) |
-| \`${planModeKey}\` | Toggle plan mode |
 | \`Ctrl+R\` | Search prompt history |
 | \`${expandToolsKey}\` | Toggle tool output expansion |
 | \`Ctrl+T\` | Toggle todo list expansion |

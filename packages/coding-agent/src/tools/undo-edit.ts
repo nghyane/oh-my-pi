@@ -1,0 +1,145 @@
+/**
+ * Undo edit tool — reverts the last edit/write to a file.
+ */
+import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
+import type { Component } from "@oh-my-pi/pi-tui";
+import { Text } from "@oh-my-pi/pi-tui";
+import { isEnoent, untilAborted } from "@oh-my-pi/pi-utils";
+import { type Static, Type } from "@sinclair/typebox";
+import { renderPromptTemplate } from "../config/prompt-templates";
+import type { RenderResultOptions } from "../extensibility/custom-tools/types";
+import type { Theme } from "../modes/theme/theme";
+import { generateUnifiedDiffString } from "../patch/diff";
+import { normalizeToLF, stripBom } from "../patch/normalize";
+import undoEditDescription from "../prompts/tools/undo-edit.md" with { type: "text" };
+import { Ellipsis, Hasher, type RenderCache, renderStatusLine, truncateToWidth } from "../tui";
+import type { ToolSession } from ".";
+import { invalidateFsScanAfterWrite } from "./fs-cache-invalidation";
+import { resolveToCwd } from "./path-utils";
+import { getDiffStats, replaceTabs, shortenPath, ToolUIKit } from "./render-utils";
+import { ToolError } from "./tool-errors";
+import { popUndo } from "./undo-history";
+
+const undoEditSchema = Type.Object({
+	path: Type.String({ description: "Path to the file whose last edit should be undone (relative or absolute)" }),
+});
+
+export interface UndoEditToolDetails {
+	diff: string;
+}
+
+export class UndoEditTool implements AgentTool<typeof undoEditSchema, UndoEditToolDetails> {
+	readonly name = "undo_edit";
+	readonly label = "Undo";
+	readonly description: string;
+	readonly parameters = undoEditSchema;
+	readonly nonAbortable = true;
+	readonly concurrency = "exclusive";
+
+	constructor(private readonly session: ToolSession) {
+		this.description = renderPromptTemplate(undoEditDescription);
+	}
+
+	async execute(
+		_toolCallId: string,
+		{ path }: Static<typeof undoEditSchema>,
+		signal?: AbortSignal,
+	): Promise<AgentToolResult<UndoEditToolDetails>> {
+		return untilAborted(signal, async () => {
+			const absolutePath = resolveToCwd(path, this.session.cwd);
+
+			const previousContent = popUndo(absolutePath);
+			if (previousContent === undefined) {
+				throw new ToolError(`No undo history for ${path}. Only the most recent edit per file can be undone.`);
+			}
+
+			// Read current content for diff
+			let currentContent = "";
+			try {
+				currentContent = await Bun.file(absolutePath).text();
+			} catch (err) {
+				if (!isEnoent(err)) throw err;
+			}
+
+			await Bun.write(absolutePath, previousContent);
+			invalidateFsScanAfterWrite(absolutePath);
+
+			const normalizedOld = normalizeToLF(stripBom(currentContent).text);
+			const normalizedNew = normalizeToLF(stripBom(previousContent).text);
+			const diffResult = generateUnifiedDiffString(normalizedOld, normalizedNew);
+
+			return {
+				content: [{ type: "text", text: `Reverted ${path} to its state before the last edit` }],
+				details: { diff: diffResult.diff },
+			};
+		});
+	}
+}
+
+// =============================================================================
+// TUI Renderer
+// =============================================================================
+
+interface UndoEditRenderArgs {
+	path?: string;
+}
+
+export const undoEditToolRenderer = {
+	mergeCallAndResult: true,
+
+	renderCall(args: UndoEditRenderArgs, uiTheme: Theme): Component {
+		const filePath = shortenPath(args.path ?? "");
+		const pathDisplay = filePath ? uiTheme.fg("accent", filePath) : uiTheme.fg("toolOutput", "…");
+		const text = renderStatusLine({ icon: "pending", title: "Undo", description: pathDisplay }, uiTheme);
+		return new Text(text, 0, 0);
+	},
+
+	renderResult(
+		result: { content: Array<{ type: string; text?: string }>; details?: UndoEditToolDetails; isError?: boolean },
+		options: RenderResultOptions,
+		uiTheme: Theme,
+		args?: UndoEditRenderArgs,
+	): Component {
+		const ui = new ToolUIKit(uiTheme);
+		const filePath = shortenPath(args?.path ?? "");
+		const pathDisplay = filePath ? uiTheme.fg("accent", filePath) : uiTheme.fg("toolOutput", "…");
+		const errorText = result.isError ? (result.content?.find(c => c.type === "text")?.text ?? "") : "";
+
+		let cached: RenderCache | undefined;
+
+		return {
+			render(width) {
+				const { expanded } = options;
+				const key = new Hasher().bool(expanded).u32(width).digest();
+				if (cached?.key === key) return cached.lines;
+
+				const header = renderStatusLine(
+					{ icon: result.isError ? "error" : "success", title: "Undo", description: pathDisplay },
+					uiTheme,
+				);
+				let text = header;
+
+				if (result.isError) {
+					if (errorText) {
+						text += `\n\n${uiTheme.fg("error", replaceTabs(errorText))}`;
+					}
+				} else if (result.details?.diff) {
+					const diffStats = getDiffStats(result.details.diff);
+					text += `\n${uiTheme.fg("dim", uiTheme.format.bracketLeft)}${ui.formatDiffStats(
+						diffStats.added,
+						diffStats.removed,
+						diffStats.hunks,
+					)}${uiTheme.fg("dim", uiTheme.format.bracketRight)}`;
+				}
+
+				const lines =
+					width > 0 ? text.split("\n").map(line => truncateToWidth(line, width, Ellipsis.Omit)) : text.split("\n");
+				cached = { key, lines };
+				return lines;
+			},
+			invalidate() {
+				cached = undefined;
+			},
+		};
+	},
+};

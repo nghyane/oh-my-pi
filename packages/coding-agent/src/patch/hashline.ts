@@ -458,7 +458,9 @@ export function parseTag(ref: string): { line: number; hash: string } {
 	//  5. optional trailing display suffix (":..." or "  ...")
 	const match = ref.match(/^\s*[>+-]*\s*(\d+)\s*#\s*([ZPMQVRWSNKTXJBYH]{2})/);
 	if (!match) {
-		throw new Error(`Invalid line reference "${ref}". Expected format "LINE#ID" (e.g. "5#aa").`);
+		throw new Error(
+			`Invalid line reference "${ref}". Expected format "N#XX" (e.g. "5#PM") — copy the tag verbatim from read output.`,
+		);
 	}
 	const line = Number.parseInt(match[1], 10);
 	if (line < 1) {
@@ -590,6 +592,7 @@ export function applyHashlineEdits(
 	}
 
 	const fileLines = content.split("\n");
+	const hadFinalNewline = content.endsWith("\n");
 	const originalFileLines = [...fileLines];
 	let firstChangedLine: number | undefined;
 	const noopEdits: Array<{ editIndex: number; loc: string; currentContent: string }> = [];
@@ -900,8 +903,16 @@ export function applyHashlineEdits(
 		}
 	}
 
+	let finalContent = fileLines.join("\n");
+	// Preserve trailing newline behavior of original content
+	if (hadFinalNewline && !finalContent.endsWith("\n")) {
+		finalContent += "\n";
+	} else if (!hadFinalNewline && finalContent.endsWith("\n")) {
+		finalContent = finalContent.slice(0, -1);
+	}
+
 	return {
-		content: fileLines.join("\n"),
+		content: finalContent,
 		firstChangedLine,
 		...(noopEdits.length > 0 ? { noopEdits } : {}),
 	};

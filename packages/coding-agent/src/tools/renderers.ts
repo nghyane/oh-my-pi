@@ -21,6 +21,7 @@ import { pythonToolRenderer } from "./python";
 import { readToolRenderer } from "./read";
 import { sshToolRenderer } from "./ssh";
 import { todoWriteToolRenderer } from "./todo-write";
+import { undoEditToolRenderer } from "./undo-edit";
 import { writeToolRenderer } from "./write";
 
 type ToolRenderer = {
@@ -50,6 +51,7 @@ export const toolRenderers: Record<string, ToolRenderer> = {
 	ssh: sshToolRenderer as ToolRenderer,
 	task: taskToolRenderer as ToolRenderer,
 	todo_write: todoWriteToolRenderer as ToolRenderer,
+	undo_edit: undoEditToolRenderer as ToolRenderer,
 	fetch: fetchToolRenderer as ToolRenderer,
 	web_search: webSearchToolRenderer as ToolRenderer,
 	write: writeToolRenderer as ToolRenderer,

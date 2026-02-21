@@ -216,9 +216,7 @@ export interface ParsedAgentFields {
 	name: string;
 	description: string;
 	tools?: string[];
-	spawns?: string[] | "*";
 	model?: string[];
-	output?: unknown;
 	thinkingLevel?: ThinkingLevel;
 }
 
@@ -241,31 +239,10 @@ export function parseAgentFields(frontmatter: Record<string, unknown>): ParsedAg
 		tools = [...tools, "submit_result"];
 	}
 
-	// Parse spawns field (array, "*", or CSV)
-	let spawns: string[] | "*" | undefined;
-	if (frontmatter.spawns === "*") {
-		spawns = "*";
-	} else if (typeof frontmatter.spawns === "string") {
-		const trimmed = frontmatter.spawns.trim();
-		if (trimmed === "*") {
-			spawns = "*";
-		} else {
-			spawns = parseArrayOrCSV(trimmed);
-		}
-	} else {
-		spawns = parseArrayOrCSV(frontmatter.spawns);
-	}
-
-	// Backward compat: infer spawns: "*" when tools includes "task"
-	if (spawns === undefined && tools?.includes("task")) {
-		spawns = "*";
-	}
-
-	const output = frontmatter.output !== undefined ? frontmatter.output : undefined;
 	const model = parseModelList(frontmatter.model);
 	const thinkingLevel = parseThinkingLevel(frontmatter);
 
-	return { name, description, tools, spawns, model, output, thinkingLevel };
+	return { name, description, tools, model, thinkingLevel };
 }
 
 async function globIf(

@@ -25,7 +25,6 @@ export { ArtifactProtocolHandler, type ArtifactProtocolOptions } from "./artifac
 export { DocsProtocolHandler } from "./docs-protocol";
 export { applyQuery, parseQuery, pathToQuery } from "./json-query";
 export { MemoryProtocolHandler, type MemoryProtocolOptions, resolveMemoryUrlToPath } from "./memory-protocol";
-export { PlanProtocolHandler, type PlanProtocolOptions, resolvePlanUrlToPath } from "./plan-protocol";
 export { InternalUrlRouter } from "./router";
 export { RuleProtocolHandler, type RuleProtocolOptions } from "./rule-protocol";
 export { SkillProtocolHandler, type SkillProtocolOptions } from "./skill-protocol";

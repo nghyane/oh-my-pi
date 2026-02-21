@@ -505,13 +505,16 @@ async function executeToolCalls(
 			if (!tool) throw new Error(`Tool ${toolCall.name} not found`);
 
 			const validatedArgs = validateToolArguments(tool, { ...toolCall, arguments: argsForExecution });
-			const toolContext = getToolContext
+			const baseContext = getToolContext
 				? getToolContext({
 						batchId,
 						index,
 						total: toolCalls.length,
 						toolCalls: toolCallInfos,
 					})
+				: undefined;
+			const toolContext = baseContext
+				? { ...baseContext, emit: (event: AgentEvent) => stream.push(event) }
 				: undefined;
 			result = await tool.execute(
 				toolCall.id,

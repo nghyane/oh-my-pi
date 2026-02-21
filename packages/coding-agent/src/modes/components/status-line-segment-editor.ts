@@ -17,7 +17,6 @@ import { ALL_SEGMENT_IDS } from "./status-line/segments";
 const SEGMENT_INFO: Record<StatusLineSegmentId, { label: string; short: string }> = {
 	pi: { label: "Pi", short: "π icon" },
 	model: { label: "Model", short: "model name" },
-	plan_mode: { label: "Plan Mode", short: "plan status" },
 	path: { label: "Path", short: "working dir" },
 	git: { label: "Git", short: "branch/status" },
 	subagents: { label: "Agents", short: "subagent count" },

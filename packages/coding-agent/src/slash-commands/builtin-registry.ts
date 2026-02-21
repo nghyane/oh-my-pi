@@ -73,14 +73,6 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec> = [
 		},
 	},
 	{
-		name: "plan",
-		description: "Toggle plan mode (agent plans before executing)",
-		handle: async (_command, runtime) => {
-			await runtime.ctx.handlePlanModeCommand();
-			runtime.ctx.editor.setText("");
-		},
-	},
-	{
 		name: "model",
 		aliases: ["models"],
 		description: "Select model (opens selector UI)",

@@ -43,6 +43,7 @@
 		"@mozilla/readability": "0.6.0",
 		"@oh-my-pi/omp-stats": "workspace:*",
 		"@oh-my-pi/pi-agent-core": "workspace:*",
+		"@oh-my-pi/pi-codemode": "workspace:*",
 		"@oh-my-pi/pi-ai": "workspace:*",
 		"@oh-my-pi/pi-natives": "workspace:*",
 		"@oh-my-pi/pi-tui": "workspace:*",

@@ -240,7 +240,7 @@ export {
 	type SessionMessageEntry,
 	type ThinkingLevelChangeEntry,
 } from "./session/session-manager";
-export { runSubprocess } from "./task/executor";
+export { runAgent } from "./task/executor";
 export type { AgentDefinition, AgentProgress, AgentSource, SingleResult, TaskParams } from "./task/types";
 // Tools (detail types and utilities)
 export {

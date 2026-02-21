@@ -321,9 +321,10 @@ export const editToolRenderer = {
 		const opTitle = op === "create" ? "Create" : op === "delete" ? "Delete" : "Edit";
 
 		// Pre-compute metadata line (static across renders)
+		const lineCountSource = args?.newText ?? args?.oldText ?? args?.diff ?? args?.patch ?? null;
 		const metadataLine =
 			op !== "delete"
-				? `\n${formatMetadataLine(countLines(args?.newText ?? args?.oldText ?? args?.diff ?? args?.patch ?? ""), editLanguage, uiTheme)}`
+				? `\n${formatMetadataLine(lineCountSource ? countLines(lineCountSource) : null, editLanguage, uiTheme)}`
 				: "";
 
 		// Pre-compute error text (static)

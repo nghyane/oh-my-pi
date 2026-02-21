@@ -575,12 +575,10 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 	// Apply model role overrides from CLI args or env vars (ephemeral, not persisted)
 	const smolModel = parsedArgs.smol ?? $env.PI_SMOL_MODEL;
 	const slowModel = parsedArgs.slow ?? $env.PI_SLOW_MODEL;
-	const planModel = parsedArgs.plan ?? $env.PI_PLAN_MODEL;
-	if (smolModel || slowModel || planModel) {
+	if (smolModel || slowModel) {
 		settings.overrideModelRoles({
 			smol: smolModel,
 			slow: slowModel,
-			plan: planModel,
 		});
 	}
 

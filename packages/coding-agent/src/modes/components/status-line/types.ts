@@ -20,10 +20,6 @@ export interface SegmentContext {
 	session: AgentSession;
 	width: number;
 	options: StatusLineSegmentOptions;
-	planMode: {
-		enabled: boolean;
-		paused: boolean;
-	} | null;
 	// Cached values for performance (computed once per render)
 	usageStats: {
 		input: number;

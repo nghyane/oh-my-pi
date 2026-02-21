@@ -69,7 +69,6 @@ export class StatusLineComponent implements Component {
 	#hookStatuses: Map<string, string> = new Map();
 	#subagentCount: number = 0;
 	#sessionStartTime: number = Date.now();
-	#planModeStatus: { enabled: boolean; paused: boolean } | null = null;
 
 	// Git status caching (1s TTL)
 	#cachedGitStatus: { staged: number; unstaged: number; untracked: number } | null = null;
@@ -100,10 +99,6 @@ export class StatusLineComponent implements Component {
 
 	setSessionStartTime(time: number): void {
 		this.#sessionStartTime = time;
-	}
-
-	setPlanModeStatus(status: { enabled: boolean; paused: boolean } | undefined): void {
-		this.#planModeStatus = status ?? null;
 	}
 
 	setHookStatus(key: string, text: string | undefined): void {
@@ -260,7 +255,6 @@ export class StatusLineComponent implements Component {
 			session: this.session,
 			width,
 			options: this.#resolveSettings().segmentOptions ?? {},
-			planMode: this.#planModeStatus,
 			usageStats,
 			contextPercent,
 			contextWindow,

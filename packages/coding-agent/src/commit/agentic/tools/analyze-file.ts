@@ -17,14 +17,6 @@ const analyzeFileSchema = Type.Object({
 	goal: Type.Optional(Type.String({ description: "Optional analysis focus" })),
 });
 
-const analyzeFileOutputSchema = {
-	properties: {
-		summary: { type: "string" },
-		highlights: { elements: { type: "string" } },
-		risks: { elements: { type: "string" } },
-	},
-};
-
 function buildToolSession(
 	ctx: CustomToolContext,
 	options: {
@@ -78,7 +70,6 @@ export function createAnalyzeFileTool(options: {
 			});
 			const taskParams: TaskParams = {
 				agent: "quick_task",
-				schema: analyzeFileOutputSchema,
 				tasks,
 			};
 			return taskTool.execute(toolCallId, taskParams, signal, onUpdate);

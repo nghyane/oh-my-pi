@@ -9,7 +9,6 @@ import type { MCPManager } from "../mcp";
 import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
 import type { HistoryStorage } from "../session/history-storage";
 import type { SessionContext, SessionManager } from "../session/session-manager";
-import type { ExitPlanModeDetails } from "../tools";
 import type { AssistantMessageComponent } from "./components/assistant-message";
 import type { BashExecutionComponent } from "./components/bash-execution";
 import type { CustomEditor } from "./components/custom-editor";
@@ -59,8 +58,6 @@ export interface InteractiveModeContext {
 	isBashMode: boolean;
 	toolOutputExpanded: boolean;
 	todoExpanded: boolean;
-	planModeEnabled: boolean;
-	planModePlanFilePath?: string;
 	hideThinkingBlock: boolean;
 	pendingImages: ImageContent[];
 	compactionQueuedMessages: CompactionQueuedMessage[];
@@ -114,7 +111,6 @@ export interface InteractiveModeContext {
 	queueCompactionMessage(text: string, mode: "steer" | "followUp"): void;
 	flushCompactionQueue(options?: { willRetry?: boolean }): Promise<void>;
 	flushPendingBashComponents(): void;
-	flushPendingModelSwitch(): Promise<void>;
 	setWorkingMessage(message?: string): void;
 	applyPendingWorkingMessage(): void;
 	isKnownSlashCommand(text: string): boolean;
@@ -186,8 +182,6 @@ export interface InteractiveModeContext {
 	toggleThinkingBlockVisibility(): void;
 	openExternalEditor(): void;
 	registerExtensionShortcuts(): void;
-	handlePlanModeCommand(): Promise<void>;
-	handleExitPlanModeTool(details: ExitPlanModeDetails): Promise<void>;
 
 	// Hook UI methods
 	initHooksAndCustomTools(): Promise<void>;

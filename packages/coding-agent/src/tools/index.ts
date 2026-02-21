@@ -1,4 +1,5 @@
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
+import { createCodeTool } from "@oh-my-pi/pi-codemode";
 import { $env, logger } from "@oh-my-pi/pi-utils";
 import type { PromptTemplate } from "../config/prompt-templates";
 import type { Settings } from "../config/settings";
@@ -8,7 +9,6 @@ import { getPreludeDocs, warmPythonEnvironment } from "../ipy/executor";
 import { checkPythonKernelAvailability } from "../ipy/kernel";
 import { LspTool } from "../lsp";
 import { EditTool } from "../patch";
-import type { PlanModeState } from "../plan-mode/state";
 import type { ArtifactManager } from "../session/artifacts";
 import { TaskTool } from "../task";
 import type { AgentOutputManager } from "../task/output-manager";
@@ -18,7 +18,6 @@ import { AskTool } from "./ask";
 import { BashTool } from "./bash";
 import { BrowserTool } from "./browser";
 import { CalculatorTool } from "./calculator";
-import { ExitPlanModeTool } from "./exit-plan-mode";
 import { FetchTool } from "./fetch";
 import { FindTool } from "./find";
 import { GrepTool } from "./grep";
@@ -30,6 +29,7 @@ import { reportFindingTool } from "./review";
 import { loadSshTool } from "./ssh";
 import { SubmitResultTool } from "./submit-result";
 import { TodoWriteTool } from "./todo-write";
+import { UndoEditTool } from "./undo-edit";
 import { WriteTool } from "./write";
 
 // Exa MCP tools (22 tools)
@@ -69,7 +69,6 @@ export { AskTool, type AskToolDetails } from "./ask";
 export { BashTool, type BashToolDetails, type BashToolInput, type BashToolOptions } from "./bash";
 export { BrowserTool, type BrowserToolDetails } from "./browser";
 export { CalculatorTool, type CalculatorToolDetails } from "./calculator";
-export { type ExitPlanModeDetails, ExitPlanModeTool } from "./exit-plan-mode";
 export { FetchTool, type FetchToolDetails } from "./fetch";
 export { type FindOperations, FindTool, type FindToolDetails, type FindToolInput, type FindToolOptions } from "./find";
 export { setPreferredImageProvider } from "./gemini-image";
@@ -91,6 +90,7 @@ export {
 	truncateLine,
 	truncateTail,
 } from "./truncate";
+export { UndoEditTool, type UndoEditToolDetails } from "./undo-edit";
 export { WriteTool, type WriteToolDetails, type WriteToolInput } from "./write";
 
 /** Tool type (AgentTool from pi-ai) */
@@ -154,8 +154,6 @@ export interface ToolSession {
 	agentOutputManager?: AgentOutputManager;
 	/** Settings instance for passing to subagents */
 	settings: Settings;
-	/** Plan mode state (if active) */
-	getPlanModeState?: () => PlanModeState | undefined;
 	/** Get compact conversation context for subagents (excludes tool results, system prompts) */
 	getCompactContext?: () => string;
 }
@@ -177,6 +175,7 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	browser: s => new BrowserTool(s),
 	task: TaskTool.create,
 	todo_write: s => new TodoWriteTool(s),
+	undo_edit: s => new UndoEditTool(s),
 	fetch: s => new FetchTool(s),
 	web_search: s => new SearchTool(s),
 	write: s => new WriteTool(s),
@@ -185,7 +184,6 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 export const HIDDEN_TOOLS: Record<string, ToolFactory> = {
 	submit_result: s => new SubmitResultTool(s),
 	report_finding: () => reportFindingTool,
-	exit_plan_mode: s => new ExitPlanModeTool(s),
 };
 
 export type ToolName = keyof typeof BUILTIN_TOOLS;
@@ -227,9 +225,6 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 	const includeSubmitResult = session.requireSubmitResultTool === true;
 	const enableLsp = session.enableLsp ?? true;
 	const requestedTools = toolNames && toolNames.length > 0 ? [...new Set(toolNames)] : undefined;
-	if (requestedTools && !requestedTools.includes("exit_plan_mode")) {
-		requestedTools.push("exit_plan_mode");
-	}
 	const pythonMode = getPythonModeFromEnv() ?? session.settings.get("python.toolMode");
 	const skipPythonPreflight = session.skipPythonPreflight === true;
 	let pythonAvailable = true;
@@ -314,7 +309,6 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 			: [
 					...Object.entries(BUILTIN_TOOLS).filter(([name]) => isToolAllowed(name)),
 					...(includeSubmitResult ? ([["submit_result", HIDDEN_TOOLS.submit_result]] as const) : []),
-					...([["exit_plan_mode", HIDDEN_TOOLS.exit_plan_mode]] as const),
 				];
 
 	const results = await Promise.all(

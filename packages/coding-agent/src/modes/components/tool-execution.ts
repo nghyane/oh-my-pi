@@ -96,6 +96,7 @@ export class ToolExecutionComponent extends Container {
 	#editFuzzyThreshold: number | undefined;
 	#editAllowFuzzy: boolean | undefined;
 	#isPartial = true;
+	#compact: boolean;
 	#tool?: AgentTool;
 	#ui: TUI;
 	#cwd: string;
@@ -132,6 +133,7 @@ export class ToolExecutionComponent extends Container {
 		tool: AgentTool | undefined,
 		ui: TUI,
 		cwd: string = getProjectDir(),
+		{ compact = false }: { compact?: boolean } = {},
 	) {
 		super();
 		this.#toolName = toolName;
@@ -140,15 +142,21 @@ export class ToolExecutionComponent extends Container {
 		this.#showImages = options.showImages ?? true;
 		this.#editFuzzyThreshold = options.editFuzzyThreshold;
 		this.#editAllowFuzzy = options.editAllowFuzzy;
+		this.#compact = compact;
 		this.#tool = tool;
 		this.#ui = ui;
 		this.#cwd = cwd;
 
-		this.addChild(new Spacer(1));
+		if (!compact) {
+			this.addChild(new Spacer(1));
+		}
 
 		// Always create both - contentBox for custom tools/bash/tools with renderers, contentText for other built-ins
-		this.#contentBox = new Box(1, 1, (text: string) => theme.bg("toolPendingBg", text));
-		this.#contentText = new Text("", 1, 1, (text: string) => theme.bg("toolPendingBg", text));
+		const px = compact ? 0 : 1;
+		const py = compact ? 0 : 1;
+		const initialBg = compact ? undefined : (text: string) => theme.bg("toolPendingBg", text);
+		this.#contentBox = new Box(px, py, initialBg);
+		this.#contentText = new Text("", px, py, initialBg);
 
 		// Use Box for custom tools or built-in tools that have renderers
 		const hasRenderer = toolName in toolRenderers;
@@ -365,13 +373,15 @@ export class ToolExecutionComponent extends Container {
 		this.#updateDisplay();
 	}
 
+	#getBgFn(): ((text: string) => string) | undefined {
+		if (this.#compact) return undefined;
+		if (this.#isPartial) return (text: string) => theme.bg("toolPendingBg", text);
+		if (this.#result?.isError) return (text: string) => theme.bg("toolErrorBg", text);
+		return (text: string) => theme.bg("toolSuccessBg", text);
+	}
+
 	#updateDisplay(): void {
-		// Set background based on state
-		const bgFn = this.#isPartial
-			? (text: string) => theme.bg("toolPendingBg", text)
-			: this.#result?.isError
-				? (text: string) => theme.bg("toolErrorBg", text)
-				: (text: string) => theme.bg("toolSuccessBg", text);
+		const bgFn = this.#getBgFn();
 
 		// Sync shared mutable render state for component closures
 		this.#renderState.expanded = this.#expanded;

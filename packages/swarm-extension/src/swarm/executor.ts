@@ -1,7 +1,7 @@
 /**
  * Swarm agent execution via oh-my-pi's subagent infrastructure.
  *
- * Wraps `runSubprocess` to spawn individual swarm agents with full tool access.
+ * Wraps `runAgent` to spawn individual swarm agents with full tool access.
  * Each agent runs in the swarm workspace with its task instructions as the user prompt.
  */
 import * as path from "node:path";
@@ -14,7 +14,7 @@ import type {
 	Settings,
 	SingleResult,
 } from "@oh-my-pi/pi-coding-agent";
-import { runSubprocess } from "@oh-my-pi/pi-coding-agent";
+import { runAgent } from "@oh-my-pi/pi-coding-agent";
 import type { SwarmAgent } from "./schema";
 import type { StateTracker } from "./state";
 
@@ -75,7 +75,7 @@ export async function executeSwarmAgent(
 	await stateTracker.appendLog(agent.name, `Starting iteration ${iteration}`);
 
 	try {
-		const result = await runSubprocess({
+		const result = await runAgent({
 			cwd: workspace,
 			agent: agentDef,
 			task: agent.task,

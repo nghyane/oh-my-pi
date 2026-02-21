@@ -54,3 +54,17 @@ pi-*.html
 
 # Generated files
 packages/coding-agent/src/internal-urls/docs-index.generated.ts
+
+# Build artifacts in src/ (noEmit packages)
+packages/agent/src/*.js
+packages/agent/src/*.js.map
+packages/agent/src/*.d.ts
+packages/agent/src/*.d.ts.map
+packages/ai/src/**/*.js
+packages/ai/src/**/*.js.map
+packages/ai/src/**/*.d.ts
+packages/ai/src/**/*.d.ts.map
+packages/utils/src/**/*.js
+packages/utils/src/**/*.js.map
+packages/utils/src/**/*.d.ts
+packages/utils/src/**/*.d.ts.map

@@ -30,7 +30,8 @@ import {
 	invalidateFsScanAfterWrite,
 } from "../tools/fs-cache-invalidation";
 import { outputMeta } from "../tools/output-meta";
-import { enforcePlanModeWrite, resolvePlanPath } from "../tools/plan-mode-guard";
+import { resolveToCwd } from "../tools/path-utils";
+import { saveForUndo } from "../tools/undo-history";
 import { applyPatch } from "./applicator";
 import { generateDiffString, generateUnifiedDiffString, replaceText } from "./diff";
 import { findMatch } from "./fuzzy";
@@ -164,7 +165,7 @@ function stripNewLinePrefixes(lines: string[]): string[] {
 	if (nonEmpty === 0) return lines;
 
 	const stripHash = hashPrefixCount > 0 && hashPrefixCount >= nonEmpty * 0.5;
-	const stripPlus = !stripHash && diffPlusCount > 0 && diffPlusCount >= nonEmpty * 0.5;
+	const stripPlus = !stripHash && nonEmpty >= 2 && diffPlusCount > 0 && diffPlusCount >= nonEmpty * 0.5;
 
 	if (!stripHash && !stripPlus) return lines;
 
@@ -190,7 +191,7 @@ const hashlineInsertContentFormat = (kind: string) =>
 
 const hashlineTagFormat = (what: string) =>
 	Type.String({
-		description: `Tag identifying the ${what} in "LINE#ID" format`,
+		description: `Tag identifying the ${what} — format "N#XX" (e.g. "5#PM"), copied verbatim from read output`,
 	});
 
 function hashlineParseContent(edit: string | string[] | null): string[] {
@@ -521,14 +522,12 @@ export class EditTool implements AgentTool<TInput> {
 		if (this.mode === "hashline") {
 			const { path, edits, delete: deleteFile, rename } = params as HashlineParams;
 
-			enforcePlanModeWrite(this.session, path, { op: deleteFile ? "delete" : "update", rename });
-
 			if (path.endsWith(".ipynb") && edits?.length > 0) {
 				throw new Error("Cannot edit Jupyter notebooks with the Edit tool. Use the NotebookEdit tool instead.");
 			}
 
-			const absolutePath = resolvePlanPath(this.session, path);
-			const resolvedRename = rename ? resolvePlanPath(this.session, rename) : undefined;
+			const absolutePath = resolveToCwd(path, this.session.cwd);
+			const resolvedRename = rename ? resolveToCwd(rename, this.session.cwd) : undefined;
 			const file = Bun.file(absolutePath);
 
 			if (deleteFile) {
@@ -748,6 +747,7 @@ export class EditTool implements AgentTool<TInput> {
 
 			const finalContent = bom + restoreLineEndings(result.content, originalEnding);
 			const writePath = resolvedRename ?? absolutePath;
+			saveForUndo(absolutePath, rawContent);
 			const diagnostics = await this.#writethrough(
 				writePath,
 				finalContent,
@@ -803,9 +803,8 @@ export class EditTool implements AgentTool<TInput> {
 			// Normalize unrecognized operations to "update"
 			const op: Operation = rawOp === "create" || rawOp === "delete" ? rawOp : "update";
 
-			enforcePlanModeWrite(this.session, path, { op, rename });
-			const resolvedPath = resolvePlanPath(this.session, path);
-			const resolvedRename = rename ? resolvePlanPath(this.session, rename) : undefined;
+			const resolvedPath = resolveToCwd(path, this.session.cwd);
+			const resolvedRename = rename ? resolveToCwd(rename, this.session.cwd) : undefined;
 
 			if (path.endsWith(".ipynb")) {
 				throw new Error("Cannot edit Jupyter notebooks with the Edit tool. Use the NotebookEdit tool instead.");
@@ -822,6 +821,9 @@ export class EditTool implements AgentTool<TInput> {
 				fuzzyThreshold: this.#fuzzyThreshold,
 				allowFuzzy: this.#allowFuzzy,
 			});
+			if (result.change.oldContent !== undefined) {
+				saveForUndo(resolvedPath, result.change.oldContent);
+			}
 			if (resolvedRename) {
 				invalidateFsScanAfterRename(resolvedPath, resolvedRename);
 			} else if (result.change.type === "delete") {
@@ -882,8 +884,6 @@ export class EditTool implements AgentTool<TInput> {
 		// ─────────────────────────────────────────────────────────────────
 		const { path, old_text, new_text, all } = params as ReplaceParams;
 
-		enforcePlanModeWrite(this.session, path);
-
 		if (path.endsWith(".ipynb")) {
 			throw new Error("Cannot edit Jupyter notebooks with the Edit tool. Use the NotebookEdit tool instead.");
 		}
@@ -892,7 +892,7 @@ export class EditTool implements AgentTool<TInput> {
 			throw new Error("old_text must not be empty.");
 		}
 
-		const absolutePath = resolvePlanPath(this.session, path);
+		const absolutePath = resolveToCwd(path, this.session.cwd);
 		const file = Bun.file(absolutePath);
 
 		if (!(await file.exists())) {
@@ -942,6 +942,7 @@ export class EditTool implements AgentTool<TInput> {
 		}
 
 		const finalContent = bom + restoreLineEndings(result.content, originalEnding);
+		saveForUndo(absolutePath, rawContent);
 		const diagnostics = await this.#writethrough(absolutePath, finalContent, signal, file, batchRequest);
 		invalidateFsScanAfterWrite(absolutePath);
 		const diffResult = generateDiffString(normalizedContent, result.content);
