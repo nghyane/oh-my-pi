@@ -28,7 +28,7 @@ function isValidIdentifier(name: string): boolean {
 }
 
 function safePropName(name: string): string {
-	return isValidIdentifier(name) ? name : `"${name}"`;
+	return isValidIdentifier(name) ? name : JSON.stringify(name);
 }
 
 function schemaToTs(schema: JSONSchema, inline = false): string {
@@ -36,12 +36,12 @@ function schemaToTs(schema: JSONSchema, inline = false): string {
 
 	// Literal / const
 	if (schema.const !== undefined) {
-		return typeof schema.const === "string" ? `"${schema.const}"` : String(schema.const);
+		return typeof schema.const === "string" ? JSON.stringify(schema.const) : String(schema.const);
 	}
 
 	// Enum
 	if (schema.enum) {
-		return schema.enum.map(v => (typeof v === "string" ? `"${v}"` : String(v))).join(" | ");
+		return schema.enum.map(v => (typeof v === "string" ? JSON.stringify(v) : String(v))).join(" | ");
 	}
 
 	// Union types (anyOf / oneOf)

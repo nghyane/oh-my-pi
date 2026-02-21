@@ -52,9 +52,13 @@ export async function execute(
 	const { timeoutMs = 300_000, signal } = options;
 	const logs: string[] = [];
 
-	// Build the codemode proxy — any property access returns an async dispatch function
+	// Build the codemode proxy — any property access returns an async dispatch function.
+	// Must handle symbol keys (e.g., Symbol.toPrimitive, Symbol.toStringTag) and
+	// "then" (to prevent `await codemode` treating it as a thenable).
 	const codemode = new Proxy({} as Record<string, ToolFn>, {
-		get: (_target, prop: string) => {
+		get: (_target, prop) => {
+			// Symbol keys and "then" return undefined to avoid thenable/inspect issues
+			if (typeof prop !== "string" || prop === "then") return undefined;
 			const fn = fns[prop];
 			if (!fn) {
 				return async () => {
@@ -116,6 +120,12 @@ export async function execute(
 	} catch (err) {
 		const error = err instanceof Error ? err.message : String(err);
 		logger.debug("Code Mode execution error", { error });
+		// Suppress unhandled rejection from the still-running resultPromise.
+		// The code may still be executing in-flight tool calls after timeout/abort;
+		// swallowing the rejection prevents Node/Bun from crashing.
+		// Note: we cannot cancel the in-flight work since AsyncFunction has no
+		// cancellation primitive — the external abort signal passed to tool.execute()
+		// handles cooperative cancellation at the tool level.
 		return { result: undefined, logs, error };
 	} finally {
 		for (const cleanup of cleanups) cleanup();

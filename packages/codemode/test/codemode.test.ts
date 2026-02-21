@@ -116,6 +116,38 @@ describe("normalizeCode", () => {
 		const result = normalizeCode(code);
 		expect(result).toContain("async () => {");
 	});
+
+	test("last line is closing brace → no auto-return", () => {
+		const code = "if (true) {\n  doStuff();\n}";
+		const result = normalizeCode(code);
+		expect(result).toBe(`async () => {\n${code}\n}`);
+		expect(result).not.toContain("return (})");
+	});
+
+	test("last line is }) → no auto-return", () => {
+		const code = "arr.forEach(x => {\n  use(x);\n})";
+		const result = normalizeCode(code);
+		expect(result).toBe(`async () => {\n${code}\n}`);
+	});
+
+	test("last line is }); → no auto-return", () => {
+		const code = "arr.forEach(x => {\n  use(x);\n});";
+		const result = normalizeCode(code);
+		expect(result).toBe(`async () => {\n${code}\n}`);
+	});
+
+	test("strips markdown js code fences", () => {
+		const code = `\`\`\`js\nasync () => { return 1; }\n\`\`\``;
+		expect(normalizeCode(code)).toBe("async () => { return 1; }");
+	});
+
+	test("strips markdown typescript code fences", () => {
+		const code = `\`\`\`typescript\nconst x = 1;\nreturn x;\n\`\`\``;
+		const result = normalizeCode(code);
+		expect(result).toContain("const x = 1;");
+		expect(result).toContain("return x;");
+		expect(result).not.toContain("\`\`\`");
+	});
 });
 
 describe("sanitizeToolName", () => {
@@ -149,6 +181,21 @@ describe("sanitizeToolName", () => {
 
 	test("special chars replaced", () => {
 		expect(sanitizeToolName("tool@v2")).toBe("tool_v2");
+	});
+});
+
+describe("generateTypes", () => {
+	test("digit-prefixed tool produces valid type name", async () => {
+		const { generateTypes } = await import("../src/type-generator");
+		const tools = [{
+			name: "123tool",
+			parameters: { type: "object", properties: {} },
+			execute: async () => ({ content: [] }),
+		}] as any;
+		const { declarations } = generateTypes(tools);
+		expect(declarations).not.toMatch(/^interface \d/m);
+		expect(declarations).not.toMatch(/^type \d/m);
+		expect(declarations).toContain("Tool123toolInput");
 	});
 });
 
@@ -237,6 +284,11 @@ describe("jsonSchemaToTypeScript", () => {
 		expect(result).toBe("string | number");
 	});
 
+	test("string const with quotes is escaped", () => {
+		const result = jsonSchemaToTypeScript({ const: 'say "hello"' });
+		expect(result).toBe('"say \\"hello\\""');
+	});
+
 	test("unknown input", () => {
 		expect(jsonSchemaToTypeScript(null)).toBe("unknown");
 		expect(jsonSchemaToTypeScript({})).toBe("unknown");
@@ -295,6 +347,15 @@ describe("execute", () => {
 			{ signal: controller.signal },
 		);
 		expect(result.error).toContain("aborted");
+	});
+
+	test("proxy handles symbol keys and 'then' safely", async () => {
+		const result = await execute(
+			"async () => { const c = codemode; return typeof c.then; }",
+			{},
+		);
+		expect(result.result).toBe("undefined");
+		expect(result.error).toBeUndefined();
 	});
 
 	test("shadowed globals", async () => {

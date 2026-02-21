@@ -5,15 +5,41 @@
  * - A complete async arrow function: `async () => { ... }`
  * - Loose statements: `const x = await codemode.read(...); return x;`
  * - A single expression: `codemode.bash({ command: "ls" })`
+ * - Markdown-fenced code blocks
  * - Empty or whitespace
  *
- * This normalizer wraps everything into `async () => { ... }` form.
+ * This normalizer strips fences and wraps everything into `async () => { ... }` form.
  */
 
 const ASYNC_ARROW_RE = /^\s*async\s*\(.*?\)\s*=>/s;
+const FENCE_RE = /^```(?:js|javascript|typescript|ts)?\s*\n([\s\S]*?)\n\s*```\s*$/;
+
+/** Strip markdown code fences if present */
+function stripFences(code: string): string {
+	const match = FENCE_RE.exec(code);
+	return match ? match[1] : code;
+}
+
+/** Lines starting with these cannot be auto-returned */
+const NON_EXPRESSION_PREFIXES = [
+	"const ", "let ", "var ",
+	"if ", "if(",
+	"for ", "for(",
+	"while ", "while(",
+	"switch ", "switch(",
+	"try ", "try{",
+	"throw ",
+	"do ", "do{",
+	"class ",
+	"function ", "async function ",
+	"{",
+	"}", "})", "})", "});", "}]", "],",
+	"//", "/*",
+	"return ",
+];
 
 export function normalizeCode(code: string): string {
-	const trimmed = code.trim();
+	const trimmed = stripFences(code.trim()).trim();
 
 	if (!trimmed) {
 		return "async () => {}";
@@ -35,27 +61,9 @@ export function normalizeCode(code: string): string {
 		// Multi-statement: wrap as body, auto-return last expression if possible
 		const stmts = trimmed.split("\n");
 		const lastLine = stmts[stmts.length - 1].trim();
-		const isExpression =
-			!lastLine.startsWith("const ") &&
-			!lastLine.startsWith("let ") &&
-			!lastLine.startsWith("var ") &&
-			!lastLine.startsWith("if ") &&
-			!lastLine.startsWith("for ") &&
-			!lastLine.startsWith("while ") &&
-			!lastLine.startsWith("switch ") &&
-			!lastLine.startsWith("try ") &&
-			!lastLine.startsWith("try{") &&
-			!lastLine.startsWith("throw ") &&
-			!lastLine.startsWith("do ") &&
-			!lastLine.startsWith("do{") &&
-			!lastLine.startsWith("class ") &&
-			!lastLine.startsWith("function ") &&
-			!lastLine.startsWith("async function ") &&
-			!lastLine.startsWith("{") &&
-			!lastLine.startsWith("//") &&
-			!lastLine.startsWith("/*");
+		const isExpression = !NON_EXPRESSION_PREFIXES.some(p => lastLine.startsWith(p));
 
-		if (isExpression && !lastLine.startsWith("return ")) {
+		if (isExpression) {
 			stmts[stmts.length - 1] = `return (${lastLine.replace(/;$/, "")});`;
 		}
 		return `async () => {\n${stmts.join("\n")}\n}`;

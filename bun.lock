@@ -65,7 +65,6 @@
       "version": "12.15.1",
       "dependencies": {
         "@oh-my-pi/pi-agent-core": "workspace:*",
-        "@oh-my-pi/pi-ai": "workspace:*",
         "@oh-my-pi/pi-utils": "workspace:*",
         "@sinclair/typebox": "^0.34.48",
       },

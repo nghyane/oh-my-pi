@@ -9,53 +9,12 @@ import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import { jsonSchemaToTypeScript } from "./schema-to-ts";
 
 const JS_RESERVED = new Set([
-	"break",
-	"case",
-	"catch",
-	"class",
-	"const",
-	"continue",
-	"debugger",
-	"default",
-	"delete",
-	"do",
-	"else",
-	"enum",
-	"export",
-	"extends",
-	"false",
-	"finally",
-	"for",
-	"function",
-	"if",
-	"import",
-	"in",
-	"instanceof",
-	"new",
-	"null",
-	"return",
-	"super",
-	"switch",
-	"this",
-	"throw",
-	"true",
-	"try",
-	"typeof",
-	"var",
-	"void",
-	"while",
-	"with",
-	"yield",
-	"let",
-	"static",
-	"implements",
-	"interface",
-	"package",
-	"private",
-	"protected",
-	"public",
-	"await",
-	"async",
+	"break", "case", "catch", "class", "const", "continue", "debugger", "default",
+	"delete", "do", "else", "enum", "export", "extends", "false", "finally",
+	"for", "function", "if", "import", "in", "instanceof", "new", "null",
+	"return", "super", "switch", "this", "throw", "true", "try", "typeof",
+	"var", "void", "while", "with", "yield", "let", "static", "implements",
+	"interface", "package", "private", "protected", "public", "await", "async",
 ]);
 
 /**
@@ -71,11 +30,20 @@ export function sanitizeToolName(name: string): string {
 	return safe;
 }
 
+/**
+ * Convert a sanitized name to PascalCase for type names.
+ * Filters empty segments to handle leading underscores (e.g., "_123tool").
+ * Ensures result starts with a letter by prefixing "Tool" if needed.
+ */
 function toPascalCase(name: string): string {
-	return name
+	const result = name
 		.split(/[_\s-]+/)
+		.filter(s => s.length > 0)
 		.map(s => s.charAt(0).toUpperCase() + s.slice(1))
 		.join("");
+	// If result starts with a digit, prefix with "Tool"
+	if (/^\d/.test(result)) return `Tool${result}`;
+	return result || "Unknown";
 }
 
 interface GeneratedTypes {
