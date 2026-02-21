@@ -1,0 +1,181 @@
+const TURN_ABORTED_GUIDANCE = "<turn_aborted>\n" +
+    "The previous turn was aborted. Any running tools/commands were terminated. " +
+    "If tools were aborted, they may have partially executed; verify current state before retrying.\n" +
+    "</turn_aborted>";
+/**
+ * Normalize tool call ID for cross-provider compatibility.
+ * OpenAI Responses API generates IDs that are 450+ chars with special characters like `|`.
+ * Anthropic APIs require IDs matching ^[a-zA-Z0-9_-]+$ (max 64 chars).
+ *
+ * For aborted/errored turns, this function:
+ * - Preserves tool call structure (unlike converting to text summaries)
+ * - Injects synthetic "aborted" tool results
+ * - Adds a <turn_aborted> guidance marker for the model
+ */
+export function transformMessages(messages, model, normalizeToolCallId) {
+    // Build a map of original tool call IDs to normalized IDs
+    const toolCallIdMap = new Map();
+    // First pass: transform messages (thinking blocks, tool call ID normalization)
+    const transformed = messages.map(msg => {
+        // User messages pass through unchanged
+        if (msg.role === "user") {
+            return msg;
+        }
+        // Handle toolResult messages - normalize toolCallId if we have a mapping
+        if (msg.role === "toolResult") {
+            const normalizedId = toolCallIdMap.get(msg.toolCallId);
+            if (normalizedId && normalizedId !== msg.toolCallId) {
+                return { ...msg, toolCallId: normalizedId };
+            }
+            return msg;
+        }
+        // Assistant messages need transformation check
+        if (msg.role === "assistant") {
+            const assistantMsg = msg;
+            const isSameModel = assistantMsg.provider === model.provider &&
+                assistantMsg.api === model.api &&
+                assistantMsg.model === model.id;
+            const transformedContent = assistantMsg.content.flatMap(block => {
+                if (block.type === "thinking") {
+                    // For same model: keep thinking blocks with signatures (needed for replay)
+                    // even if the thinking text is empty (OpenAI encrypted reasoning)
+                    if (isSameModel && block.thinkingSignature)
+                        return block;
+                    // Skip empty thinking blocks, convert others to plain text
+                    if (!block.thinking || block.thinking.trim() === "")
+                        return [];
+                    if (isSameModel)
+                        return block;
+                    return {
+                        type: "text",
+                        text: block.thinking,
+                    };
+                }
+                if (block.type === "text") {
+                    if (isSameModel)
+                        return block;
+                    return {
+                        type: "text",
+                        text: block.text,
+                    };
+                }
+                if (block.type === "toolCall") {
+                    const toolCall = block;
+                    let normalizedToolCall = toolCall;
+                    if (!isSameModel && toolCall.thoughtSignature) {
+                        normalizedToolCall = { ...toolCall };
+                        delete normalizedToolCall.thoughtSignature;
+                    }
+                    if (!isSameModel && normalizeToolCallId) {
+                        const normalizedId = normalizeToolCallId(toolCall.id, model, assistantMsg);
+                        if (normalizedId !== toolCall.id) {
+                            toolCallIdMap.set(toolCall.id, normalizedId);
+                            normalizedToolCall = { ...normalizedToolCall, id: normalizedId };
+                        }
+                    }
+                    return normalizedToolCall;
+                }
+                return block;
+            });
+            return {
+                ...assistantMsg,
+                content: transformedContent,
+            };
+        }
+        return msg;
+    });
+    // Second pass: insert synthetic empty tool results for orphaned tool calls
+    // This preserves thinking signatures and satisfies API requirements
+    const result = [];
+    let pendingToolCalls = [];
+    // Track tool call status: whether resolved (has result) or aborted (skip real results)
+    const toolCallStatus = new Map();
+    for (let i = 0; i < transformed.length; i++) {
+        const msg = transformed[i];
+        if (msg.role === "assistant") {
+            // If we have pending orphaned tool calls from a previous assistant, insert synthetic results now
+            if (pendingToolCalls.length > 0) {
+                for (const tc of pendingToolCalls) {
+                    if (!toolCallStatus.has(tc.id)) {
+                        result.push({
+                            role: "toolResult",
+                            toolCallId: tc.id,
+                            toolName: tc.name,
+                            content: [{ type: "text", text: "No result provided" }],
+                            isError: true,
+                            timestamp: Date.now(),
+                        });
+                        toolCallStatus.set(tc.id, 1 /* ToolCallStatus.Resolved */);
+                    }
+                }
+                pendingToolCalls = [];
+            }
+            // For errored/aborted assistant messages: keep tool calls intact,
+            // inject synthetic "aborted" results, and add guidance marker.
+            // This preserves structure so the model knows what was attempted.
+            const assistantMsg = msg;
+            const toolCalls = assistantMsg.content.filter(b => b.type === "toolCall");
+            if (assistantMsg.stopReason === "error" || assistantMsg.stopReason === "aborted") {
+                // Push the assistant message with tool calls intact
+                result.push(msg);
+                // Inject synthetic "aborted" results for each tool call
+                for (const tc of toolCalls) {
+                    toolCallStatus.set(tc.id, 2 /* ToolCallStatus.Aborted */);
+                    result.push({
+                        role: "toolResult",
+                        toolCallId: tc.id,
+                        toolName: tc.name,
+                        content: [{ type: "text", text: "aborted" }],
+                        isError: true,
+                        timestamp: assistantMsg.timestamp,
+                    });
+                }
+                // Inject turn_aborted guidance marker as synthetic user message
+                result.push({
+                    role: "user",
+                    content: TURN_ABORTED_GUIDANCE,
+                    synthetic: true,
+                    timestamp: assistantMsg.timestamp + 1,
+                });
+                continue;
+            }
+            // Track tool calls from this normal assistant message
+            if (toolCalls.length > 0) {
+                pendingToolCalls = toolCalls;
+            }
+            result.push(msg);
+        }
+        else if (msg.role === "toolResult") {
+            // Skip tool results for aborted tool calls (we already injected synthetic ones)
+            if (toolCallStatus.get(msg.toolCallId) === 2 /* ToolCallStatus.Aborted */)
+                continue;
+            toolCallStatus.set(msg.toolCallId, 1 /* ToolCallStatus.Resolved */);
+            result.push(msg);
+        }
+        else if (msg.role === "user") {
+            // User message interrupts tool flow - insert synthetic results for orphaned calls
+            if (pendingToolCalls.length > 0) {
+                for (const tc of pendingToolCalls) {
+                    if (!toolCallStatus.has(tc.id)) {
+                        result.push({
+                            role: "toolResult",
+                            toolCallId: tc.id,
+                            toolName: tc.name,
+                            content: [{ type: "text", text: "No result provided" }],
+                            isError: true,
+                            timestamp: Date.now(),
+                        });
+                        toolCallStatus.set(tc.id, 1 /* ToolCallStatus.Resolved */);
+                    }
+                }
+                pendingToolCalls = [];
+            }
+            result.push(msg);
+        }
+        else {
+            result.push(msg);
+        }
+    }
+    return result;
+}
+//# sourceMappingURL=transform-messages.js.map

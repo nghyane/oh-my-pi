@@ -20,14 +20,19 @@ export interface CodeModeToolEvent {
 
 export type CodeModeEventHandler = (event: CodeModeToolEvent) => void;
 
+/** Dispatch function that accepts a toolCallId for consistent tracking */
+export type DispatchFn = (toolCallId: string, args: Record<string, unknown>) => Promise<unknown>;
+
 /**
  * Wrap tool functions with event emission.
  *
  * Returns a new function map where each call emits tool_start before
  * execution and tool_done/tool_error after, forwarding to the original.
+ * The bridge generates the toolCallId and passes it to the dispatch fn
+ * so both the event and the underlying tool.execute() use the same ID.
  */
 export function bridgeToolFunctions(
-	fns: Record<string, (args: Record<string, unknown>) => Promise<unknown>>,
+	fns: Record<string, DispatchFn>,
 	/** Map from sanitized name → original tool name */
 	nameMap: Map<string, string>,
 	onEvent: CodeModeEventHandler,
@@ -42,7 +47,7 @@ export function bridgeToolFunctions(
 			onEvent({ type: "tool_start", toolCallId, toolName: originalName, args });
 			const start = performance.now();
 			try {
-				const result = await fn(args);
+				const result = await fn(toolCallId, args);
 				const durationMs = performance.now() - start;
 				onEvent({ type: "tool_done", toolCallId, toolName: originalName, args, result, durationMs });
 				return result;

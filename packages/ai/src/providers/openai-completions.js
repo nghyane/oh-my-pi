@@ -1,0 +1,885 @@
+import { $env } from "@oh-my-pi/pi-utils";
+import OpenAI from "openai";
+import { calculateCost } from "../models";
+import { getEnvApiKey } from "../stream";
+import { AssistantMessageEventStream } from "../utils/event-stream";
+import { appendRawHttpRequestDumpFor400 } from "../utils/http-inspector";
+import { parseStreamingJson } from "../utils/json-parse";
+import { getKimiCommonHeaders } from "../utils/oauth/kimi";
+import { formatErrorMessageWithRetryAfter } from "../utils/retry-after";
+import { sanitizeSurrogates } from "../utils/sanitize-unicode";
+import { mapToOpenAICompletionsToolChoice } from "../utils/tool-choice";
+import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers";
+import { transformMessages } from "./transform-messages";
+/**
+ * Normalize tool call ID for Mistral.
+ * Mistral requires tool IDs to be exactly 9 alphanumeric characters (a-z, A-Z, 0-9).
+ */
+function normalizeMistralToolId(id, isMistral) {
+    if (!isMistral)
+        return id;
+    // Remove non-alphanumeric characters
+    let normalized = id.replace(/[^a-zA-Z0-9]/g, "");
+    // Mistral requires exactly 9 characters
+    if (normalized.length < 9) {
+        // Pad with deterministic characters based on original ID to ensure matching
+        const padding = "ABCDEFGHI";
+        normalized = normalized + padding.slice(0, 9 - normalized.length);
+    }
+    else if (normalized.length > 9) {
+        normalized = normalized.slice(0, 9);
+    }
+    return normalized;
+}
+/**
+ * Check if conversation messages contain tool calls or tool results.
+ * This is needed because Anthropic (via proxy) requires the tools param
+ * to be present when messages include tool_calls or tool role messages.
+ */
+function hasToolHistory(messages) {
+    for (const msg of messages) {
+        if (msg.role === "toolResult") {
+            return true;
+        }
+        if (msg.role === "assistant") {
+            if (msg.content.some(block => block.type === "toolCall")) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+// LIMITATION: The think tag parser uses naive string matching for <think>/<thinking> tags.
+// If MiniMax models output these literal strings in code blocks, XML examples, or explanations,
+// they will be incorrectly consumed as thinking delimiters, truncating visible output.
+// A streaming parser with arbitrary chunk boundaries cannot reliably detect code block context.
+// This is acceptable because: (1) only enabled for minimax-code providers, (2) MiniMax models
+// use these tags as their actual thinking format, and (3) false positives are rare in practice.
+const MINIMAX_THINK_OPEN_TAGS = ["<think>", "<thinking>"];
+const MINIMAX_THINK_CLOSE_TAGS = ["</think>", "</thinking>"];
+function findFirstTag(text, tags) {
+    let earliestIndex = Number.POSITIVE_INFINITY;
+    let earliestTag;
+    for (const tag of tags) {
+        const index = text.indexOf(tag);
+        if (index !== -1 && index < earliestIndex) {
+            earliestIndex = index;
+            earliestTag = tag;
+        }
+    }
+    if (!earliestTag)
+        return undefined;
+    return { index: earliestIndex, tag: earliestTag };
+}
+function getTrailingPartialTag(text, tags) {
+    let maxLength = 0;
+    for (const tag of tags) {
+        const maxCandidateLength = Math.min(tag.length - 1, text.length);
+        for (let length = maxCandidateLength; length > 0; length--) {
+            if (text.endsWith(tag.slice(0, length))) {
+                if (length > maxLength)
+                    maxLength = length;
+                break;
+            }
+        }
+    }
+    if (maxLength === 0)
+        return "";
+    return text.slice(-maxLength);
+}
+export const streamOpenAICompletions = (model, context, options) => {
+    const stream = new AssistantMessageEventStream();
+    (async () => {
+        const startTime = Date.now();
+        let firstTokenTime;
+        const output = {
+            role: "assistant",
+            content: [],
+            api: model.api,
+            provider: model.provider,
+            model: model.id,
+            usage: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 0,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "stop",
+            timestamp: Date.now(),
+        };
+        let rawRequestDump;
+        try {
+            const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
+            const client = await createClient(model, context, apiKey, options?.headers);
+            const params = buildParams(model, context, options);
+            options?.onPayload?.(params);
+            rawRequestDump = {
+                provider: model.provider,
+                api: output.api,
+                model: model.id,
+                method: "POST",
+                url: `${model.baseUrl ?? "https://api.openai.com/v1"}/chat/completions`,
+                body: params,
+            };
+            const openaiStream = await client.chat.completions.create(params, { signal: options?.signal });
+            stream.push({ type: "start", partial: output });
+            let currentBlock = null;
+            const blocks = output.content;
+            const blockIndex = () => blocks.length - 1;
+            const finishCurrentBlock = (block) => {
+                if (block) {
+                    if (block.type === "text") {
+                        stream.push({
+                            type: "text_end",
+                            contentIndex: blockIndex(),
+                            content: block.text,
+                            partial: output,
+                        });
+                    }
+                    else if (block.type === "thinking") {
+                        stream.push({
+                            type: "thinking_end",
+                            contentIndex: blockIndex(),
+                            content: block.thinking,
+                            partial: output,
+                        });
+                    }
+                    else if (block.type === "toolCall") {
+                        block.arguments = parseStreamingJson(block.partialArgs);
+                        delete block.partialArgs;
+                        stream.push({
+                            type: "toolcall_end",
+                            contentIndex: blockIndex(),
+                            toolCall: block,
+                            partial: output,
+                        });
+                    }
+                }
+            };
+            const parseMiniMaxThinkTags = model.provider === "minimax-code" || model.provider === "minimax-code-cn";
+            let taggedTextBuffer = "";
+            let insideTaggedThinking = false;
+            const appendTextDelta = (delta) => {
+                if (delta.length === 0)
+                    return;
+                if (!currentBlock || currentBlock.type !== "text") {
+                    finishCurrentBlock(currentBlock);
+                    currentBlock = { type: "text", text: "" };
+                    output.content.push(currentBlock);
+                    stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
+                }
+                if (currentBlock.type === "text") {
+                    currentBlock.text += delta;
+                    stream.push({
+                        type: "text_delta",
+                        contentIndex: blockIndex(),
+                        delta,
+                        partial: output,
+                    });
+                }
+            };
+            const appendThinkingDelta = (delta, signature) => {
+                if (delta.length === 0)
+                    return;
+                if (!currentBlock ||
+                    currentBlock.type !== "thinking" ||
+                    (signature !== undefined && currentBlock.thinkingSignature !== signature)) {
+                    finishCurrentBlock(currentBlock);
+                    currentBlock = {
+                        type: "thinking",
+                        thinking: "",
+                        thinkingSignature: signature,
+                    };
+                    output.content.push(currentBlock);
+                    stream.push({ type: "thinking_start", contentIndex: blockIndex(), partial: output });
+                }
+                if (currentBlock.type === "thinking") {
+                    if (signature !== undefined && !currentBlock.thinkingSignature) {
+                        currentBlock.thinkingSignature = signature;
+                    }
+                    currentBlock.thinking += delta;
+                    stream.push({
+                        type: "thinking_delta",
+                        contentIndex: blockIndex(),
+                        delta,
+                        partial: output,
+                    });
+                }
+            };
+            const flushTaggedTextBuffer = () => {
+                while (taggedTextBuffer.length > 0) {
+                    if (insideTaggedThinking) {
+                        const closingTag = findFirstTag(taggedTextBuffer, MINIMAX_THINK_CLOSE_TAGS);
+                        if (closingTag) {
+                            appendThinkingDelta(taggedTextBuffer.slice(0, closingTag.index));
+                            taggedTextBuffer = taggedTextBuffer.slice(closingTag.index + closingTag.tag.length);
+                            insideTaggedThinking = false;
+                            continue;
+                        }
+                        const trailingPartialTag = getTrailingPartialTag(taggedTextBuffer, MINIMAX_THINK_CLOSE_TAGS);
+                        const flushLength = taggedTextBuffer.length - trailingPartialTag.length;
+                        appendThinkingDelta(taggedTextBuffer.slice(0, flushLength));
+                        taggedTextBuffer = trailingPartialTag;
+                        break;
+                    }
+                    const openingTag = findFirstTag(taggedTextBuffer, MINIMAX_THINK_OPEN_TAGS);
+                    if (openingTag) {
+                        appendTextDelta(taggedTextBuffer.slice(0, openingTag.index));
+                        taggedTextBuffer = taggedTextBuffer.slice(openingTag.index + openingTag.tag.length);
+                        insideTaggedThinking = true;
+                        continue;
+                    }
+                    const trailingPartialTag = getTrailingPartialTag(taggedTextBuffer, MINIMAX_THINK_OPEN_TAGS);
+                    const flushLength = taggedTextBuffer.length - trailingPartialTag.length;
+                    appendTextDelta(taggedTextBuffer.slice(0, flushLength));
+                    taggedTextBuffer = trailingPartialTag;
+                    break;
+                }
+            };
+            for await (const chunk of openaiStream) {
+                if (chunk.usage) {
+                    // Check for cached_tokens at root level (Kimi) or in prompt_tokens_details (OpenAI)
+                    const cachedTokens = chunk.usage.cached_tokens ??
+                        chunk.usage.prompt_tokens_details?.cached_tokens ??
+                        0;
+                    const reasoningTokens = chunk.usage.completion_tokens_details?.reasoning_tokens || 0;
+                    const input = (chunk.usage.prompt_tokens || 0) - cachedTokens;
+                    const outputTokens = (chunk.usage.completion_tokens || 0) + reasoningTokens;
+                    output.usage = {
+                        // OpenAI includes cached tokens in prompt_tokens, so subtract to get non-cached input
+                        input,
+                        output: outputTokens,
+                        cacheRead: cachedTokens,
+                        cacheWrite: 0,
+                        // Compute totalTokens ourselves since we add reasoning_tokens to output
+                        // and some providers (e.g., Groq) don't include them in total_tokens
+                        totalTokens: input + outputTokens + cachedTokens,
+                        cost: {
+                            input: 0,
+                            output: 0,
+                            cacheRead: 0,
+                            cacheWrite: 0,
+                            total: 0,
+                        },
+                    };
+                    calculateCost(model, output.usage);
+                }
+                const choice = chunk.choices[0];
+                if (!choice)
+                    continue;
+                if (choice.finish_reason) {
+                    output.stopReason = mapStopReason(choice.finish_reason);
+                }
+                if (choice.delta) {
+                    if (choice.delta.content !== null &&
+                        choice.delta.content !== undefined &&
+                        choice.delta.content.length > 0) {
+                        if (!firstTokenTime)
+                            firstTokenTime = Date.now();
+                        if (parseMiniMaxThinkTags) {
+                            taggedTextBuffer += choice.delta.content;
+                            flushTaggedTextBuffer();
+                        }
+                        else {
+                            appendTextDelta(choice.delta.content);
+                        }
+                    }
+                    // Some endpoints return reasoning in reasoning_content (llama.cpp),
+                    // or reasoning (other openai compatible endpoints)
+                    // Use the first non-empty reasoning field to avoid duplication
+                    // (e.g., chutes.ai returns both reasoning_content and reasoning with same content)
+                    const reasoningFields = ["reasoning_content", "reasoning", "reasoning_text"];
+                    let foundReasoningField = null;
+                    for (const field of reasoningFields) {
+                        if (choice.delta[field] !== null &&
+                            choice.delta[field] !== undefined &&
+                            choice.delta[field].length > 0) {
+                            if (!foundReasoningField) {
+                                foundReasoningField = field;
+                                break;
+                            }
+                        }
+                    }
+                    if (foundReasoningField) {
+                        const delta = choice.delta[foundReasoningField];
+                        appendThinkingDelta(delta, foundReasoningField);
+                    }
+                    if (choice?.delta?.tool_calls) {
+                        for (const toolCall of choice.delta.tool_calls) {
+                            if (!currentBlock ||
+                                currentBlock.type !== "toolCall" ||
+                                (toolCall.id && currentBlock.id !== toolCall.id)) {
+                                finishCurrentBlock(currentBlock);
+                                currentBlock = {
+                                    type: "toolCall",
+                                    id: toolCall.id || "",
+                                    name: toolCall.function?.name || "",
+                                    arguments: {},
+                                    partialArgs: "",
+                                };
+                                output.content.push(currentBlock);
+                                stream.push({ type: "toolcall_start", contentIndex: blockIndex(), partial: output });
+                            }
+                            if (currentBlock.type === "toolCall") {
+                                if (toolCall.id)
+                                    currentBlock.id = toolCall.id;
+                                if (toolCall.function?.name)
+                                    currentBlock.name = toolCall.function.name;
+                                let delta = "";
+                                if (toolCall.function?.arguments) {
+                                    delta = toolCall.function.arguments;
+                                    currentBlock.partialArgs += toolCall.function.arguments;
+                                    currentBlock.arguments = parseStreamingJson(currentBlock.partialArgs);
+                                }
+                                stream.push({
+                                    type: "toolcall_delta",
+                                    contentIndex: blockIndex(),
+                                    delta,
+                                    partial: output,
+                                });
+                            }
+                        }
+                    }
+                    const reasoningDetails = choice.delta.reasoning_details;
+                    if (reasoningDetails && Array.isArray(reasoningDetails)) {
+                        for (const detail of reasoningDetails) {
+                            if (detail.type === "reasoning.encrypted" && detail.id && detail.data) {
+                                const matchingToolCall = output.content.find(b => b.type === "toolCall" && b.id === detail.id);
+                                if (matchingToolCall) {
+                                    matchingToolCall.thoughtSignature = JSON.stringify(detail);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if (parseMiniMaxThinkTags && taggedTextBuffer.length > 0) {
+                if (insideTaggedThinking) {
+                    appendThinkingDelta(taggedTextBuffer);
+                }
+                else {
+                    appendTextDelta(taggedTextBuffer);
+                }
+                taggedTextBuffer = "";
+            }
+            finishCurrentBlock(currentBlock);
+            if (options?.signal?.aborted) {
+                throw new Error("Request was aborted");
+            }
+            if (output.stopReason === "aborted" || output.stopReason === "error") {
+                throw new Error("An unknown error occurred");
+            }
+            output.duration = Date.now() - startTime;
+            if (firstTokenTime)
+                output.ttft = firstTokenTime - startTime;
+            stream.push({ type: "done", reason: output.stopReason, message: output });
+            stream.end();
+        }
+        catch (error) {
+            for (const block of output.content)
+                delete block.index;
+            output.stopReason = options?.signal?.aborted ? "aborted" : "error";
+            output.errorMessage = await appendRawHttpRequestDumpFor400(formatErrorMessageWithRetryAfter(error), error, rawRequestDump);
+            // Some providers via OpenRouter include extra details here.
+            const rawMetadata = error?.error?.metadata?.raw;
+            if (rawMetadata)
+                output.errorMessage += `\n${rawMetadata}`;
+            output.duration = Date.now() - startTime;
+            if (firstTokenTime)
+                output.ttft = firstTokenTime - startTime;
+            stream.push({ type: "error", reason: output.stopReason, error: output });
+            stream.end();
+        }
+    })();
+    return stream;
+};
+async function createClient(model, context, apiKey, extraHeaders) {
+    if (!apiKey) {
+        if (!$env.OPENAI_API_KEY) {
+            throw new Error("OpenAI API key is required. Set OPENAI_API_KEY environment variable or pass it as an argument.");
+        }
+        apiKey = $env.OPENAI_API_KEY;
+    }
+    let headers = { ...(model.headers ?? {}), ...(extraHeaders ?? {}) };
+    if (model.provider === "kimi-code") {
+        headers = { ...(await getKimiCommonHeaders()), ...headers };
+    }
+    if (model.provider === "github-copilot") {
+        const hasImages = hasCopilotVisionInput(context.messages);
+        const copilotHeaders = buildCopilotDynamicHeaders({
+            messages: context.messages,
+            hasImages,
+        });
+        Object.assign(headers, copilotHeaders);
+    }
+    return new OpenAI({
+        apiKey,
+        baseURL: model.baseUrl,
+        dangerouslyAllowBrowser: true,
+        maxRetries: 5,
+        defaultHeaders: headers,
+    });
+}
+function buildParams(model, context, options) {
+    const compat = getCompat(model);
+    const messages = convertMessages(model, context, compat);
+    maybeAddOpenRouterAnthropicCacheControl(model, messages);
+    // Kimi (including via OpenRouter) calculates TPM rate limits based on max_tokens, not actual output.
+    // Always send max_tokens to avoid their high default causing rate limit issues.
+    // Note: Direct kimi-code provider is handled by the dedicated Kimi provider in kimi.ts.
+    const isKimi = model.id.includes("moonshotai/kimi");
+    const effectiveMaxTokens = options?.maxTokens ?? (isKimi ? model.maxTokens : undefined);
+    const params = {
+        model: model.id,
+        messages,
+        stream: true,
+    };
+    if (compat.supportsUsageInStreaming !== false) {
+        params.stream_options = { include_usage: true };
+    }
+    if (compat.supportsStore) {
+        params.store = false;
+    }
+    if (effectiveMaxTokens) {
+        if (compat.maxTokensField === "max_tokens") {
+            params.max_tokens = effectiveMaxTokens;
+        }
+        else {
+            params.max_completion_tokens = effectiveMaxTokens;
+        }
+    }
+    if (options?.temperature !== undefined) {
+        params.temperature = options.temperature;
+    }
+    if (context.tools) {
+        params.tools = convertTools(context.tools, compat);
+    }
+    else if (hasToolHistory(context.messages)) {
+        // Anthropic (via LiteLLM/proxy) requires tools param when conversation has tool_calls/tool_results
+        params.tools = [];
+    }
+    if (options?.toolChoice && compat.supportsToolChoice) {
+        params.tool_choice = mapToOpenAICompletionsToolChoice(options.toolChoice);
+    }
+    if (compat.thinkingFormat === "zai" && model.reasoning) {
+        // Z.ai uses binary thinking: { type: "enabled" | "disabled" }
+        // Must explicitly disable since z.ai defaults to thinking enabled
+        params.thinking = { type: options?.reasoningEffort ? "enabled" : "disabled" };
+    }
+    else if (compat.thinkingFormat === "qwen" && model.reasoning) {
+        // Qwen uses enable_thinking: boolean
+        params.enable_thinking = !!options?.reasoningEffort;
+    }
+    else if (options?.reasoningEffort && model.reasoning && compat.supportsReasoningEffort) {
+        // OpenAI-style reasoning_effort
+        params.reasoning_effort = options.reasoningEffort;
+    }
+    // OpenRouter provider routing preferences
+    if (model.baseUrl.includes("openrouter.ai") && compat.openRouterRouting) {
+        params.provider = compat.openRouterRouting;
+    }
+    // Vercel AI Gateway provider routing preferences
+    if (model.baseUrl.includes("ai-gateway.vercel.sh") && model.compat?.vercelGatewayRouting) {
+        const routing = model.compat.vercelGatewayRouting;
+        if (routing.only || routing.order) {
+            const gatewayOptions = {};
+            if (routing.only)
+                gatewayOptions.only = routing.only;
+            if (routing.order)
+                gatewayOptions.order = routing.order;
+            params.providerOptions = { gateway: gatewayOptions };
+        }
+    }
+    return params;
+}
+function maybeAddOpenRouterAnthropicCacheControl(model, messages) {
+    if (model.provider !== "openrouter" || !model.id.startsWith("anthropic/"))
+        return;
+    // Anthropic-style caching requires cache_control on a text part. Add a breakpoint
+    // on the last user/assistant message (walking backwards until we find text content).
+    for (let i = messages.length - 1; i >= 0; i--) {
+        const msg = messages[i];
+        if (msg.role !== "user" && msg.role !== "assistant")
+            continue;
+        const content = msg.content;
+        if (typeof content === "string") {
+            msg.content = [
+                Object.assign({ type: "text", text: content }, { cache_control: { type: "ephemeral" } }),
+            ];
+            return;
+        }
+        if (!Array.isArray(content))
+            continue;
+        // Find last text part and add cache_control
+        for (let j = content.length - 1; j >= 0; j--) {
+            const part = content[j];
+            if (part?.type === "text") {
+                Object.assign(part, { cache_control: { type: "ephemeral" } });
+                return;
+            }
+        }
+    }
+}
+export function convertMessages(model, context, compat) {
+    const params = [];
+    const normalizeToolCallId = (id) => {
+        if (compat.requiresMistralToolIds)
+            return normalizeMistralToolId(id, true);
+        // Handle pipe-separated IDs from OpenAI Responses API
+        // Format: {call_id}|{id} where {id} can be 400+ chars with special chars (+, /, =)
+        // These come from providers like github-copilot, openai-codex, opencode
+        // Extract just the call_id part and normalize it
+        if (id.includes("|")) {
+            const [callId] = id.split("|");
+            // Sanitize to allowed chars and truncate to 40 chars (OpenAI limit)
+            return callId.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 40);
+        }
+        if (model.provider === "openai")
+            return id.length > 40 ? id.slice(0, 40) : id;
+        return id;
+    };
+    const transformedMessages = transformMessages(context.messages, model, id => normalizeToolCallId(id));
+    if (context.systemPrompt) {
+        const useDeveloperRole = model.reasoning && compat.supportsDeveloperRole;
+        const role = useDeveloperRole ? "developer" : "system";
+        params.push({ role: role, content: sanitizeSurrogates(context.systemPrompt) });
+    }
+    let lastRole = null;
+    for (let i = 0; i < transformedMessages.length; i++) {
+        const msg = transformedMessages[i];
+        // Some providers (e.g. Mistral/Devstral) don't allow user messages directly after tool results
+        // Insert a synthetic assistant message to bridge the gap
+        if (compat.requiresAssistantAfterToolResult && lastRole === "toolResult" && msg.role === "user") {
+            params.push({
+                role: "assistant",
+                content: "I have processed the tool results.",
+            });
+        }
+        if (msg.role === "user") {
+            if (typeof msg.content === "string") {
+                const text = sanitizeSurrogates(msg.content);
+                if (text.trim().length === 0)
+                    continue;
+                params.push({
+                    role: "user",
+                    content: text,
+                });
+            }
+            else {
+                const content = [];
+                for (const item of msg.content) {
+                    if (item.type === "text") {
+                        const text = sanitizeSurrogates(item.text);
+                        if (text.trim().length === 0)
+                            continue;
+                        content.push({
+                            type: "text",
+                            text,
+                        });
+                    }
+                    else {
+                        content.push({
+                            type: "image_url",
+                            image_url: {
+                                url: `data:${item.mimeType};base64,${item.data}`,
+                            },
+                        });
+                    }
+                }
+                const filteredContent = !model.input.includes("image")
+                    ? content.filter(c => c.type !== "image_url")
+                    : content;
+                if (filteredContent.length === 0)
+                    continue;
+                params.push({
+                    role: "user",
+                    content: filteredContent,
+                });
+            }
+        }
+        else if (msg.role === "assistant") {
+            // Some providers (e.g. Mistral) don't accept null content, use empty string instead
+            const assistantMsg = {
+                role: "assistant",
+                content: compat.requiresAssistantAfterToolResult ? "" : null,
+            };
+            const textBlocks = msg.content.filter(b => b.type === "text");
+            // Filter out empty text blocks to avoid API validation errors
+            const nonEmptyTextBlocks = textBlocks.filter(b => b.text && b.text.trim().length > 0);
+            if (nonEmptyTextBlocks.length > 0) {
+                // GitHub Copilot requires assistant content as a string, not an array.
+                // Sending as array causes Claude models to re-answer all previous prompts.
+                if (model.provider === "github-copilot") {
+                    assistantMsg.content = nonEmptyTextBlocks.map(b => sanitizeSurrogates(b.text)).join("");
+                }
+                else {
+                    assistantMsg.content = nonEmptyTextBlocks.map(b => {
+                        return { type: "text", text: sanitizeSurrogates(b.text) };
+                    });
+                }
+            }
+            // Handle thinking blocks
+            const thinkingBlocks = msg.content.filter(b => b.type === "thinking");
+            // Filter out empty thinking blocks to avoid API validation errors
+            const nonEmptyThinkingBlocks = thinkingBlocks.filter(b => b.thinking && b.thinking.trim().length > 0);
+            if (nonEmptyThinkingBlocks.length > 0) {
+                if (compat.requiresThinkingAsText) {
+                    // Convert thinking blocks to plain text (no tags to avoid model mimicking them)
+                    const thinkingText = nonEmptyThinkingBlocks.map(b => b.thinking).join("\n\n");
+                    const textContent = assistantMsg.content;
+                    if (textContent) {
+                        textContent.unshift({ type: "text", text: thinkingText });
+                    }
+                    else {
+                        assistantMsg.content = [{ type: "text", text: thinkingText }];
+                    }
+                }
+                else {
+                    // Use the signature from the first thinking block if available (for llama.cpp server + gpt-oss)
+                    const signature = nonEmptyThinkingBlocks[0].thinkingSignature;
+                    if (signature && signature.length > 0) {
+                        assistantMsg[signature] = nonEmptyThinkingBlocks.map(b => b.thinking).join("\n");
+                    }
+                }
+            }
+            if (compat.thinkingFormat === "openai") {
+                const reasoningField = compat.reasoningContentField ?? "reasoning_content";
+                const reasoningContent = assistantMsg[reasoningField];
+                if (!reasoningContent) {
+                    const reasoning = assistantMsg.reasoning;
+                    const reasoningText = assistantMsg.reasoning_text;
+                    if (reasoning && reasoningField !== "reasoning") {
+                        assistantMsg[reasoningField] = reasoning;
+                    }
+                    else if (reasoningText && reasoningField !== "reasoning_text") {
+                        assistantMsg[reasoningField] = reasoningText;
+                    }
+                    else if (nonEmptyThinkingBlocks.length > 0) {
+                        assistantMsg[reasoningField] = nonEmptyThinkingBlocks.map(b => b.thinking).join("\n");
+                    }
+                }
+            }
+            const toolCalls = msg.content.filter(b => b.type === "toolCall");
+            const hasReasoningField = assistantMsg.reasoning_content !== undefined ||
+                assistantMsg.reasoning !== undefined ||
+                assistantMsg.reasoning_text !== undefined;
+            if (toolCalls.length > 0 &&
+                compat.requiresReasoningContentForToolCalls &&
+                compat.thinkingFormat === "openai" &&
+                !hasReasoningField) {
+                const reasoningField = compat.reasoningContentField ?? "reasoning_content";
+                assistantMsg[reasoningField] = ".";
+            }
+            if (toolCalls.length > 0) {
+                assistantMsg.tool_calls = toolCalls.map(tc => ({
+                    id: normalizeMistralToolId(tc.id, compat.requiresMistralToolIds),
+                    type: "function",
+                    function: {
+                        name: tc.name,
+                        arguments: JSON.stringify(tc.arguments),
+                    },
+                }));
+                const reasoningDetails = toolCalls
+                    .filter(tc => tc.thoughtSignature)
+                    .map(tc => {
+                    try {
+                        return JSON.parse(tc.thoughtSignature);
+                    }
+                    catch {
+                        return null;
+                    }
+                })
+                    .filter(Boolean);
+                if (reasoningDetails.length > 0) {
+                    assistantMsg.reasoning_details = reasoningDetails;
+                }
+            }
+            // Skip assistant messages that have no content and no tool calls.
+            // Mistral explicitly requires "either content or tool_calls, but not none".
+            // Other providers also don't accept empty assistant messages.
+            // This handles aborted assistant responses that got no content.
+            const content = assistantMsg.content;
+            const hasContent = content !== null &&
+                content !== undefined &&
+                (typeof content === "string" ? content.length > 0 : content.length > 0);
+            if (!hasContent && assistantMsg.tool_calls && compat.requiresAssistantContentForToolCalls) {
+                assistantMsg.content = ".";
+            }
+            if (!hasContent && !assistantMsg.tool_calls) {
+                continue;
+            }
+            params.push(assistantMsg);
+        }
+        else if (msg.role === "toolResult") {
+            // Batch consecutive tool results and collect all images
+            const imageBlocks = [];
+            let j = i;
+            for (; j < transformedMessages.length && transformedMessages[j].role === "toolResult"; j++) {
+                const toolMsg = transformedMessages[j];
+                // Extract text and image content
+                const textResult = toolMsg.content
+                    .filter(c => c.type === "text")
+                    .map(c => c.text)
+                    .join("\n");
+                const hasImages = toolMsg.content.some(c => c.type === "image");
+                // Always send tool result with text (or placeholder if only images)
+                const hasText = textResult.length > 0;
+                // Some providers (e.g. Mistral) require the 'name' field in tool results
+                const toolResultMsg = {
+                    role: "tool",
+                    content: sanitizeSurrogates(hasText ? textResult : "(see attached image)"),
+                    tool_call_id: normalizeMistralToolId(toolMsg.toolCallId, compat.requiresMistralToolIds),
+                };
+                if (compat.requiresToolResultName && toolMsg.toolName) {
+                    toolResultMsg.name = toolMsg.toolName;
+                }
+                params.push(toolResultMsg);
+                if (hasImages && model.input.includes("image")) {
+                    for (const block of toolMsg.content) {
+                        if (block.type === "image") {
+                            imageBlocks.push({
+                                type: "image_url",
+                                image_url: {
+                                    url: `data:${block.mimeType};base64,${block.data}`,
+                                },
+                            });
+                        }
+                    }
+                }
+            }
+            i = j - 1;
+            // After all consecutive tool results, add a single user message with all images
+            if (imageBlocks.length > 0) {
+                if (compat.requiresAssistantAfterToolResult) {
+                    params.push({
+                        role: "assistant",
+                        content: "I have processed the tool results.",
+                    });
+                }
+                params.push({
+                    role: "user",
+                    content: [
+                        {
+                            type: "text",
+                            text: "Attached image(s) from tool result:",
+                        },
+                        ...imageBlocks,
+                    ],
+                });
+                lastRole = "user";
+            }
+            else {
+                lastRole = "toolResult";
+            }
+            continue;
+        }
+        lastRole = msg.role;
+    }
+    return params;
+}
+function convertTools(tools, compat) {
+    return tools.map(tool => ({
+        type: "function",
+        function: {
+            name: tool.name,
+            description: tool.description,
+            parameters: tool.parameters, // TypeBox already generates JSON Schema
+            // Only include strict if provider supports it. Some reject unknown fields.
+            ...(compat.supportsStrictMode !== false && { strict: false }),
+        },
+    }));
+}
+function mapStopReason(reason) {
+    if (reason === null)
+        return "stop";
+    switch (reason) {
+        case "stop":
+            return "stop";
+        case "length":
+            return "length";
+        case "function_call":
+        case "tool_calls":
+            return "toolUse";
+        case "content_filter":
+            return "error";
+        default: {
+            const _exhaustive = reason;
+            throw new Error(`Unhandled stop reason: ${_exhaustive}`);
+        }
+    }
+}
+/**
+ * Detect compatibility settings from provider and baseUrl for known providers.
+ * Provider takes precedence over URL-based detection since it's explicitly configured.
+ * Returns a fully resolved OpenAICompat object with all fields set.
+ */
+function detectCompat(model) {
+    const provider = model.provider;
+    const baseUrl = model.baseUrl;
+    const isZai = provider === "zai" || baseUrl.includes("api.z.ai");
+    const isOpenRouterKimi = provider === "openrouter" && model.id.includes("moonshotai/kimi");
+    const isNonStandard = provider === "cerebras" ||
+        baseUrl.includes("cerebras.ai") ||
+        provider === "xai" ||
+        baseUrl.includes("api.x.ai") ||
+        provider === "mistral" ||
+        baseUrl.includes("mistral.ai") ||
+        baseUrl.includes("chutes.ai") ||
+        baseUrl.includes("deepseek.com") ||
+        isZai ||
+        provider === "opencode" ||
+        baseUrl.includes("opencode.ai");
+    const useMaxTokens = provider === "mistral" || baseUrl.includes("mistral.ai") || baseUrl.includes("chutes.ai");
+    const isGrok = provider === "xai" || baseUrl.includes("api.x.ai");
+    const isMistral = provider === "mistral" || baseUrl.includes("mistral.ai");
+    return {
+        supportsStore: !isNonStandard,
+        supportsDeveloperRole: !isNonStandard,
+        supportsReasoningEffort: !isGrok && !isZai,
+        supportsUsageInStreaming: true,
+        supportsToolChoice: true,
+        maxTokensField: useMaxTokens ? "max_tokens" : "max_completion_tokens",
+        requiresToolResultName: isMistral,
+        requiresAssistantAfterToolResult: false, // Mistral no longer requires this as of Dec 2024
+        requiresThinkingAsText: isMistral,
+        requiresMistralToolIds: isMistral,
+        thinkingFormat: isZai ? "zai" : "openai",
+        reasoningContentField: "reasoning_content",
+        requiresReasoningContentForToolCalls: isOpenRouterKimi,
+        requiresAssistantContentForToolCalls: isOpenRouterKimi,
+        openRouterRouting: undefined,
+        vercelGatewayRouting: undefined,
+        supportsStrictMode: true,
+    };
+}
+/**
+ * Get resolved compatibility settings for a model.
+ * Uses explicit model.compat if provided, otherwise auto-detects from provider/URL.
+ */
+function getCompat(model) {
+    const detected = detectCompat(model);
+    if (!model.compat)
+        return detected;
+    return {
+        supportsStore: model.compat.supportsStore ?? detected.supportsStore,
+        supportsDeveloperRole: model.compat.supportsDeveloperRole ?? detected.supportsDeveloperRole,
+        supportsReasoningEffort: model.compat.supportsReasoningEffort ?? detected.supportsReasoningEffort,
+        supportsUsageInStreaming: model.compat.supportsUsageInStreaming ?? detected.supportsUsageInStreaming,
+        supportsToolChoice: model.compat.supportsToolChoice ?? detected.supportsToolChoice,
+        maxTokensField: model.compat.maxTokensField ?? detected.maxTokensField,
+        requiresToolResultName: model.compat.requiresToolResultName ?? detected.requiresToolResultName,
+        requiresAssistantAfterToolResult: model.compat.requiresAssistantAfterToolResult ?? detected.requiresAssistantAfterToolResult,
+        requiresThinkingAsText: model.compat.requiresThinkingAsText ?? detected.requiresThinkingAsText,
+        requiresMistralToolIds: model.compat.requiresMistralToolIds ?? detected.requiresMistralToolIds,
+        thinkingFormat: model.compat.thinkingFormat ?? detected.thinkingFormat,
+        reasoningContentField: model.compat.reasoningContentField ?? detected.reasoningContentField,
+        requiresReasoningContentForToolCalls: model.compat.requiresReasoningContentForToolCalls ?? detected.requiresReasoningContentForToolCalls,
+        requiresAssistantContentForToolCalls: model.compat.requiresAssistantContentForToolCalls ?? detected.requiresAssistantContentForToolCalls,
+        openRouterRouting: model.compat.openRouterRouting ?? detected.openRouterRouting,
+        vercelGatewayRouting: model.compat.vercelGatewayRouting ?? detected.vercelGatewayRouting,
+        supportsStrictMode: model.compat.supportsStrictMode ?? detected.supportsStrictMode,
+    };
+}
+//# sourceMappingURL=openai-completions.js.map

@@ -8,7 +8,7 @@
 
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import { Type } from "@sinclair/typebox";
-import { bridgeToolFunctions, type CodeModeEventHandler, type CodeModeToolEvent } from "./event-bridge";
+import { bridgeToolFunctions, type CodeModeEventHandler, type CodeModeToolEvent, type DispatchFn } from "./event-bridge";
 import { execute } from "./executor";
 import { normalizeCode } from "./normalize";
 import codeToolDescription from "./prompt.md" with { type: "text" };
@@ -79,17 +79,18 @@ export function createCodeTool(
 	// Build the tool description with embedded TypeScript API
 	const description = codeToolDescription.replace("{{types}}", declarations);
 
-	// Build the dispatch functions map (sanitized name → executor)
+	// Build the dispatch functions map (sanitized name → executor).
+	// Each fn accepts (toolCallId, args) so the event bridge's ID
+	// is forwarded to tool.execute() — no duplicate ID generation.
 	const buildDispatchFns = (
 		signal?: AbortSignal,
 		ctx?: AgentToolContext,
-	): Record<string, (args: Record<string, unknown>) => Promise<unknown>> => {
-		const fns: Record<string, (args: Record<string, unknown>) => Promise<unknown>> = {};
+	): Record<string, DispatchFn> => {
+		const fns: Record<string, DispatchFn> = {};
 
 		for (const tool of wrappedTools) {
 			const safeName = sanitizeToolName(tool.name);
-			fns[safeName] = async (args: Record<string, unknown>) => {
-				const toolCallId = `codemode_${tool.name}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+			fns[safeName] = async (toolCallId: string, args: Record<string, unknown>) => {
 				const result = await tool.execute(toolCallId, args, signal, undefined, ctx);
 				// Extract text content for the code to use
 				const textContent = result.content

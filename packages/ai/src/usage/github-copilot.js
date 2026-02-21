@@ -1,0 +1,384 @@
+const COPILOT_HEADERS = {
+    "User-Agent": "GitHubCopilotChat/0.35.0",
+    "Editor-Version": "vscode/1.107.0",
+    "Editor-Plugin-Version": "copilot-chat/0.35.0",
+    "Copilot-Integration-Id": "vscode-chat",
+};
+const DEFAULT_CACHE_TTL_MS = 60_000;
+const MAX_CACHE_TTL_MS = 300_000;
+function toNumber(value) {
+    if (typeof value === "number" && Number.isFinite(value))
+        return value;
+    if (typeof value === "string" && value.trim()) {
+        const parsed = Number(value);
+        return Number.isFinite(parsed) ? parsed : undefined;
+    }
+    return undefined;
+}
+function toBoolean(value) {
+    return typeof value === "boolean" ? value : undefined;
+}
+function isRecord(value) {
+    return !!value && typeof value === "object" && !Array.isArray(value);
+}
+function resolveGitHubApiBaseUrl(params) {
+    const baseUrl = params.baseUrl?.replace(/\/$/, "");
+    if (baseUrl && !baseUrl.includes("githubcopilot.com"))
+        return baseUrl;
+    const enterpriseUrl = params.credential.enterpriseUrl?.trim();
+    if (!enterpriseUrl)
+        return "https://api.github.com";
+    if (enterpriseUrl.startsWith("http://") || enterpriseUrl.startsWith("https://")) {
+        return enterpriseUrl.replace(/\/$/, "");
+    }
+    if (enterpriseUrl.startsWith("api.")) {
+        return `https://${enterpriseUrl}`;
+    }
+    return `https://api.${enterpriseUrl}`;
+}
+function buildCacheKey(params) {
+    const parts = [params.provider];
+    const { credential } = params;
+    if (credential.accountId)
+        parts.push(credential.accountId);
+    if (credential.email)
+        parts.push(credential.email);
+    const token = credential.apiKey || credential.accessToken || credential.refreshToken || credential.metadata?.username;
+    if (token && typeof token === "string") {
+        const fingerprint = Bun.hash(token).toString(16);
+        parts.push(fingerprint);
+    }
+    return parts.join(":");
+}
+function buildWindow(resetDate, now) {
+    if (!resetDate)
+        return undefined;
+    const resetAt = Date.parse(resetDate);
+    if (!Number.isFinite(resetAt))
+        return undefined;
+    return {
+        id: "monthly",
+        label: "Monthly",
+        resetsAt: resetAt,
+        resetInMs: resetAt - now,
+    };
+}
+function buildAmount(used, limit, unit) {
+    const safeLimit = limit !== undefined && Number.isFinite(limit) ? limit : undefined;
+    const safeUsed = used !== undefined && Number.isFinite(used) ? used : undefined;
+    const remaining = safeLimit !== undefined && safeUsed !== undefined ? Math.max(0, safeLimit - safeUsed) : undefined;
+    const usedFraction = safeLimit !== undefined && safeUsed !== undefined && safeLimit > 0 ? safeUsed / safeLimit : undefined;
+    const remainingFraction = safeLimit !== undefined && remaining !== undefined && safeLimit > 0 ? remaining / safeLimit : undefined;
+    return {
+        used: safeUsed,
+        limit: safeLimit,
+        remaining,
+        usedFraction,
+        remainingFraction,
+        unit,
+    };
+}
+function deriveStatus(amount, unlimited) {
+    if (unlimited)
+        return "ok";
+    if (amount.remainingFraction === undefined)
+        return "unknown";
+    if (amount.remainingFraction <= 0)
+        return "exhausted";
+    if (amount.remainingFraction <= 0.1)
+        return "warning";
+    return "ok";
+}
+function parseQuotaDetail(value) {
+    if (!isRecord(value))
+        return null;
+    const entitlement = toNumber(value.entitlement);
+    const remaining = toNumber(value.remaining);
+    const percentRemaining = toNumber(value.percent_remaining);
+    const unlimited = toBoolean(value.unlimited);
+    if (entitlement === undefined ||
+        remaining === undefined ||
+        percentRemaining === undefined ||
+        unlimited === undefined) {
+        return null;
+    }
+    const overageCount = toNumber(value.overage_count) ?? 0;
+    const overagePermitted = toBoolean(value.overage_permitted) ?? false;
+    const quotaId = typeof value.quota_id === "string" ? value.quota_id : "";
+    const quotaRemaining = toNumber(value.quota_remaining) ?? remaining;
+    return {
+        entitlement,
+        overage_count: overageCount,
+        overage_permitted: overagePermitted,
+        percent_remaining: percentRemaining,
+        quota_id: quotaId,
+        quota_remaining: quotaRemaining,
+        remaining,
+        unlimited,
+    };
+}
+async function fetchJson(ctx, url, init) {
+    const response = await ctx.fetch(url, init);
+    if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`${response.status} ${response.statusText}: ${text}`);
+    }
+    return response.json();
+}
+async function resolveGitHubUsername(ctx, baseUrl, token, signal) {
+    try {
+        const data = await fetchJson(ctx, `${baseUrl}/user`, {
+            headers: {
+                Accept: "application/vnd.github+json",
+                Authorization: `Bearer ${token}`,
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+            signal,
+        });
+        if (!isRecord(data))
+            return undefined;
+        return typeof data.login === "string" ? data.login : undefined;
+    }
+    catch {
+        return undefined;
+    }
+}
+async function fetchInternalUsage(ctx, githubApiBaseUrl, token, signal) {
+    const headers = {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        Authorization: `Bearer ${token}`,
+        ...COPILOT_HEADERS,
+    };
+    const data = await fetchJson(ctx, `${githubApiBaseUrl}/copilot_internal/user`, { headers, signal });
+    if (!isRecord(data))
+        throw new Error("Invalid Copilot usage response");
+    return data;
+}
+async function fetchBillingUsage(ctx, baseUrl, username, token, signal) {
+    const data = await fetchJson(ctx, `${baseUrl}/users/${encodeURIComponent(username)}/settings/billing/premium_request/usage`, {
+        headers: {
+            Accept: "application/vnd.github+json",
+            Authorization: `Bearer ${token}`,
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+        signal,
+    });
+    if (!isRecord(data))
+        throw new Error("Invalid Copilot billing usage response");
+    return data;
+}
+function buildLimitFromQuota(key, label, quota, plan, window, accountId) {
+    const used = quota.unlimited ? undefined : Math.max(0, quota.entitlement - quota.remaining);
+    const limit = quota.unlimited ? undefined : quota.entitlement;
+    const amount = buildAmount(used, limit, "requests");
+    const notes = [];
+    if (quota.unlimited)
+        notes.push("Unlimited");
+    if (quota.overage_count > 0) {
+        notes.push(`Overage requests: ${quota.overage_count}`);
+    }
+    return {
+        id: `copilot:${key}`,
+        label,
+        scope: {
+            provider: "github-copilot",
+            accountId,
+            tier: plan,
+            windowId: window?.id,
+        },
+        window,
+        amount,
+        status: deriveStatus(amount, quota.unlimited),
+        notes: notes.length > 0 ? notes : undefined,
+    };
+}
+function normalizeQuotaSnapshots(data, now, accountId) {
+    const window = buildWindow(data.quota_reset_date, now);
+    const snapshots = data.quota_snapshots ?? {};
+    const limits = [];
+    const premium = parseQuotaDetail(snapshots.premium_interactions);
+    if (premium) {
+        limits.push(buildLimitFromQuota("premium", "Premium Requests", premium, data.copilot_plan, window, accountId));
+    }
+    const chat = parseQuotaDetail(snapshots.chat);
+    if (chat && !chat.unlimited) {
+        limits.push(buildLimitFromQuota("chat", "Chat Requests", chat, data.copilot_plan, window, accountId));
+    }
+    const completions = parseQuotaDetail(snapshots.completions);
+    if (completions && !completions.unlimited) {
+        limits.push(buildLimitFromQuota("completions", "Completions", completions, data.copilot_plan, window, accountId));
+    }
+    return { limits, window };
+}
+function normalizeBillingUsage(data) {
+    const limits = [];
+    const periodLabel = data.timePeriod.month
+        ? `${data.timePeriod.year}-${String(data.timePeriod.month).padStart(2, "0")}`
+        : `${data.timePeriod.year}`;
+    const window = {
+        id: "billing-period",
+        label: periodLabel,
+    };
+    const premiumItems = data.usageItems.filter(item => item.sku === "Copilot Premium Request" || item.sku.includes("Premium"));
+    const totalUsed = premiumItems.reduce((sum, item) => sum + item.grossQuantity, 0);
+    const totalLimit = premiumItems.reduce((sum, item) => sum + (item.limit ?? 0), 0) || undefined;
+    const totalAmount = buildAmount(totalUsed, totalLimit, "requests");
+    limits.push({
+        id: "copilot:premium",
+        label: "Premium Requests",
+        scope: {
+            provider: "github-copilot",
+            accountId: data.user,
+            windowId: window.id,
+        },
+        window,
+        amount: totalAmount,
+        status: deriveStatus(totalAmount, false),
+    });
+    for (const item of data.usageItems) {
+        if (!item.model)
+            continue;
+        if (item.grossQuantity <= 0)
+            continue;
+        const amount = buildAmount(item.grossQuantity, item.limit, "requests");
+        limits.push({
+            id: `copilot:model:${item.model}`,
+            label: `Model ${item.model}`,
+            scope: {
+                provider: "github-copilot",
+                accountId: data.user,
+                modelId: item.model,
+                windowId: window.id,
+            },
+            window,
+            amount,
+            status: deriveStatus(amount, false),
+        });
+    }
+    return limits;
+}
+function resolveCacheTtl(now, report) {
+    if (!report)
+        return now + DEFAULT_CACHE_TTL_MS;
+    const resetInMs = report.limits
+        .map(limit => limit.window?.resetInMs)
+        .find((value) => typeof value === "number" && Number.isFinite(value));
+    if (!resetInMs || resetInMs <= 0)
+        return now + DEFAULT_CACHE_TTL_MS;
+    return now + Math.min(MAX_CACHE_TTL_MS, resetInMs);
+}
+export const githubCopilotUsageProvider = {
+    id: "github-copilot",
+    supports: ({ provider, credential }) => {
+        if (provider !== "github-copilot")
+            return false;
+        if (credential.type === "oauth") {
+            return Boolean(credential.refreshToken || credential.accessToken);
+        }
+        return Boolean(credential.apiKey);
+    },
+    fetchUsage: async (params, ctx) => {
+        if (!githubCopilotUsageProvider.supports?.(params))
+            return null;
+        const now = ctx.now();
+        const cacheKey = buildCacheKey(params);
+        const cached = await ctx.cache.get(cacheKey);
+        if (cached && cached.expiresAt > now)
+            return cached.value;
+        const githubApiBaseUrl = resolveGitHubApiBaseUrl(params);
+        let report = null;
+        if (params.credential.type === "api_key") {
+            let username;
+            const candidate = params.credential.accountId || params.credential.metadata?.username || params.credential.metadata?.user;
+            if (typeof candidate === "string" && candidate.trim()) {
+                username = candidate.trim();
+            }
+            if (!username && params.credential.apiKey) {
+                username = await resolveGitHubUsername(ctx, githubApiBaseUrl, params.credential.apiKey, params.signal);
+            }
+            if (!username) {
+                ctx.logger?.warn("Copilot usage requires username for billing API", { provider: params.provider });
+            }
+            else if (params.credential.apiKey) {
+                try {
+                    const billing = await fetchBillingUsage(ctx, githubApiBaseUrl, username, params.credential.apiKey, params.signal);
+                    report = {
+                        provider: "github-copilot",
+                        fetchedAt: now,
+                        limits: normalizeBillingUsage(billing),
+                        metadata: {
+                            accountId: billing.user,
+                            account: billing.user,
+                            period: billing.timePeriod,
+                        },
+                    };
+                }
+                catch (error) {
+                    ctx.logger?.warn("Copilot usage fetch failed", { error: String(error) });
+                }
+            }
+            if (!report && params.credential.apiKey) {
+                try {
+                    const usage = await fetchInternalUsage(ctx, githubApiBaseUrl, params.credential.apiKey, params.signal);
+                    const normalized = normalizeQuotaSnapshots(usage, now, username);
+                    report = {
+                        provider: "github-copilot",
+                        fetchedAt: now,
+                        limits: normalized.limits,
+                        metadata: {
+                            accountId: username,
+                            plan: usage.copilot_plan,
+                            quotaResetDate: usage.quota_reset_date,
+                        },
+                        raw: usage,
+                    };
+                }
+                catch (error) {
+                    ctx.logger?.warn("Copilot usage fetch failed", { error: String(error) });
+                }
+            }
+        }
+        else {
+            const { refreshToken, accessToken } = params.credential;
+            if (!refreshToken && !accessToken)
+                return null;
+            const oauthToken = refreshToken || accessToken;
+            if (!oauthToken)
+                return null;
+            const githubToken = refreshToken ?? accessToken;
+            if (!githubToken)
+                return null;
+            try {
+                const usage = await fetchInternalUsage(ctx, githubApiBaseUrl, githubToken, params.signal);
+                let accountId = params.credential.accountId;
+                if (!accountId && refreshToken) {
+                    accountId = await resolveGitHubUsername(ctx, githubApiBaseUrl, refreshToken, params.signal);
+                }
+                if (!accountId && accessToken) {
+                    accountId = await resolveGitHubUsername(ctx, githubApiBaseUrl, accessToken, params.signal);
+                }
+                const normalized = normalizeQuotaSnapshots(usage, now, accountId);
+                report = {
+                    provider: "github-copilot",
+                    fetchedAt: now,
+                    limits: normalized.limits,
+                    metadata: {
+                        accountId,
+                        email: params.credential.email,
+                        plan: usage.copilot_plan,
+                        quotaResetDate: usage.quota_reset_date,
+                    },
+                    raw: usage,
+                };
+            }
+            catch (error) {
+                ctx.logger?.warn("Copilot usage fetch failed", { error: String(error) });
+            }
+        }
+        const expiresAt = resolveCacheTtl(now, report);
+        await ctx.cache.set(cacheKey, { value: report, expiresAt });
+        return report;
+    },
+};
+//# sourceMappingURL=github-copilot.js.map

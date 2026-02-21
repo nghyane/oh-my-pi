@@ -342,7 +342,7 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 	// Code Mode: wrap all eligible tools into a single "code" tool
 	if (session.settings.get("codemode.enabled")) {
 		const { codeTool, excludedTools } = createCodeTool(finalTools);
-		finalTools = [codeTool as Tool, ...(excludedTools as Tool[])];
+		finalTools = [codeTool, ...excludedTools];
 		time("createTools:codemode");
 	}
 
