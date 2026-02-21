@@ -1,4 +1,5 @@
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
+import { createCodeTool } from "@oh-my-pi/pi-codemode";
 import { $env, logger } from "@oh-my-pi/pi-utils";
 import type { PromptTemplate } from "../config/prompt-templates";
 import type { Settings } from "../config/settings";
@@ -330,10 +331,20 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 	const tools = results.filter(r => r.tool !== null).map(r => r.tool as Tool);
 	const wrappedTools = tools.map(wrapToolWithMetaNotice);
 
+	let finalTools: Tool[];
 	if (filteredRequestedTools !== undefined) {
 		const allowed = new Set(filteredRequestedTools);
-		return wrappedTools.filter(tool => allowed.has(tool.name));
+		finalTools = wrappedTools.filter(tool => allowed.has(tool.name));
+	} else {
+		finalTools = wrappedTools;
 	}
 
-	return wrappedTools;
+	// Code Mode: wrap all eligible tools into a single "code" tool
+	if (session.settings.get("codemode.enabled")) {
+		const { codeTool, excludedTools } = createCodeTool(finalTools);
+		finalTools = [codeTool as Tool, ...(excludedTools as Tool[])];
+		time("createTools:codemode");
+	}
+
+	return finalTools;
 }

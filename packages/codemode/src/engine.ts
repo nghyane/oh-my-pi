@@ -1,0 +1,188 @@
+/**
+ * Code Mode engine — the main entry point.
+ *
+ * createCodeTool() takes the existing tool registry, generates TypeScript
+ * type definitions, and returns a single "code" AgentTool that the LLM
+ * uses to write orchestration code instead of making individual tool calls.
+ */
+
+import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
+import { Type } from "@sinclair/typebox";
+import { bridgeToolFunctions, type CodeModeEventHandler, type CodeModeToolEvent } from "./event-bridge";
+import { execute } from "./executor";
+import { normalizeCode } from "./normalize";
+import codeToolDescription from "./prompt.md" with { type: "text" };
+import { generateTypes, sanitizeToolName } from "./type-generator";
+
+const codeSchema = Type.Object({
+	code: Type.String({ description: "JavaScript async arrow function to execute using the codemode API" }),
+});
+
+/** Tools that require human interaction and should not be wrapped in Code Mode */
+const EXCLUDED_TOOLS = new Set(["ask", "report_finding", "exit_plan_mode", "submit_result"]);
+
+export interface CodeToolOptions {
+	/** Additional tool names to exclude from Code Mode */
+	excludeTools?: string[];
+	/** Execution timeout in milliseconds (default: 300_000) */
+	timeoutMs?: number;
+}
+
+/** Details attached to tool_execution_update for sub-tool rendering */
+export interface CodeToolDetails {
+	/** Sub-tool events that occurred during execution */
+	events: CodeModeToolEvent[];
+	/** Captured console output from the code */
+	logs: string[];
+}
+
+/** Code Mode tool with access to original wrapped tools for TUI rendering */
+export interface CodeModeAgentTool extends AgentTool {
+	/** Map of original tool name → AgentTool, used by TUI for sub-tool rendering */
+	wrappedToolMap: ReadonlyMap<string, AgentTool>;
+}
+
+/**
+ * Create a single Code Mode tool from a set of existing AgentTools.
+ *
+ * The returned tool wraps all eligible tools into a TypeScript API.
+ * The LLM writes code against this API instead of making individual
+ * tool calls, reducing round-trips and context usage.
+ *
+ * Tools in EXCLUDED_TOOLS (ask, report_finding, etc.) are passed through
+ * unchanged and should be registered alongside the code tool.
+ *
+ * @returns An object with the code tool and any excluded tools that need
+ *          to be registered separately.
+ */
+export function createCodeTool(
+	tools: AgentTool[],
+	options: CodeToolOptions = {},
+): { codeTool: CodeModeAgentTool; excludedTools: AgentTool[] } {
+	const { excludeTools = [], timeoutMs = 300_000 } = options;
+	const excludeSet = new Set([...EXCLUDED_TOOLS, ...excludeTools]);
+
+	const wrappedTools: AgentTool[] = [];
+	const excludedTools: AgentTool[] = [];
+
+	for (const tool of tools) {
+		if (excludeSet.has(tool.name)) {
+			excludedTools.push(tool);
+		} else {
+			wrappedTools.push(tool);
+		}
+	}
+
+	// Generate TypeScript declarations for the wrapped tools
+	const { declarations, nameMap } = generateTypes(wrappedTools);
+
+	// Build the tool description with embedded TypeScript API
+	const description = codeToolDescription.replace("{{types}}", declarations);
+
+	// Build the dispatch functions map (sanitized name → executor)
+	const buildDispatchFns = (
+		signal?: AbortSignal,
+		ctx?: AgentToolContext,
+	): Record<string, (args: Record<string, unknown>) => Promise<unknown>> => {
+		const fns: Record<string, (args: Record<string, unknown>) => Promise<unknown>> = {};
+
+		for (const tool of wrappedTools) {
+			const safeName = sanitizeToolName(tool.name);
+			fns[safeName] = async (args: Record<string, unknown>) => {
+				const toolCallId = `codemode_${tool.name}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+				const result = await tool.execute(toolCallId, args, signal, undefined, ctx);
+				// Extract text content for the code to use
+				const textContent = result.content
+					.filter(c => c.type === "text")
+					.map(c => c.text)
+					.join("\n");
+				return textContent || result.details;
+			};
+		}
+
+		return fns;
+	};
+
+	const codeTool: CodeModeAgentTool = {
+		name: "code",
+		label: "Code",
+		description,
+		parameters: codeSchema,
+		concurrency: "exclusive",
+		wrappedToolMap: new Map(wrappedTools.map(t => [t.name, t])),
+
+		async execute(
+			this: AgentTool,
+			_toolCallId: string,
+			params: unknown,
+			signal?: AbortSignal,
+			onUpdate?: AgentToolUpdateCallback,
+			ctx?: AgentToolContext,
+		): Promise<AgentToolResult> {
+			const code = (params as { code: string }).code;
+			const events: CodeModeToolEvent[] = [];
+
+			// Build dispatch functions
+			const rawFns = buildDispatchFns(signal, ctx);
+
+			// Wrap with event bridge — emits sub-tool events through onUpdate
+			const eventHandler: CodeModeEventHandler = event => {
+				events.push(event);
+
+				// Stream each sub-tool event through onUpdate so the TUI
+				// event controller can create real ToolExecutionComponent instances
+				if (onUpdate) {
+					onUpdate({
+						content: [{ type: "text", text: "" }],
+						details: { events, logs: [] },
+					});
+				}
+			};
+
+			const bridgedFns = bridgeToolFunctions(rawFns, nameMap, eventHandler);
+
+			// Normalize and execute
+			const normalizedCode = normalizeCode(code);
+			const result = await execute(normalizedCode, bridgedFns, { timeoutMs, signal });
+
+			// Build final result — keep concise since sub-tool results
+			// are already shown individually in the TUI
+			const parts: string[] = [];
+			if (result.error) {
+				parts.push(`Error: ${result.error}`);
+			}
+			if (result.logs.length > 0) {
+				parts.push(result.logs.join("\n"));
+			}
+			// Summarize completed sub-tools instead of dumping full output
+			const completed = events.filter(e => e.type === "tool_done");
+			const failed = events.filter(e => e.type === "tool_error");
+			if (completed.length > 0 || failed.length > 0) {
+				const summary = [
+					...completed.map(e => `${e.toolName}: done (${Math.round(e.durationMs ?? 0)}ms)`),
+					...failed.map(e => `${e.toolName}: error — ${e.error}`),
+				];
+				parts.push(summary.join("\n"));
+			}
+			if (result.result !== undefined && result.result !== null) {
+				const resultStr =
+					typeof result.result === "string" ? result.result : JSON.stringify(result.result, null, 2);
+				if (resultStr.length <= 500) {
+					parts.push(resultStr);
+				}
+			}
+			if (parts.length === 0) {
+				parts.push("(no output)");
+			}
+
+			const details: CodeToolDetails = { events, logs: result.logs };
+
+			return {
+				content: [{ type: "text", text: parts.join("\n\n") }],
+				details,
+			};
+		},
+	};
+
+	return { codeTool, excludedTools };
+}
