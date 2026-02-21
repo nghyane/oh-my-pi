@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://github.com/can1357/oh-my-pi/blob/main/assets/hero.png?raw=true" alt="Pi Monorepo">
+  <img src="https://github.com/can1357/oh-my-pi/blob/main/assets/hero.png?raw=true" alt="Oh My Pi">
 </p>
 
 <p align="center">
@@ -7,19 +7,24 @@
 </p>
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/@oh-my-pi/pi-coding-agent"><img src="https://img.shields.io/npm/v/@oh-my-pi/pi-coding-agent?style=flat&colorA=222222&colorB=CB3837" alt="npm version"></a>
-  <a href="https://github.com/can1357/oh-my-pi/blob/main/packages/coding-agent/CHANGELOG.md"><img src="https://img.shields.io/badge/changelog-keep-E05735?style=flat&colorA=222222" alt="Changelog"></a>
-  <a href="https://github.com/can1357/oh-my-pi/actions"><img src="https://img.shields.io/github/actions/workflow/status/can1357/oh-my-pi/ci.yml?style=flat&colorA=222222&colorB=3FB950" alt="CI"></a>
-  <a href="https://github.com/can1357/oh-my-pi/blob/main/LICENSE"><img src="https://img.shields.io/github/license/can1357/oh-my-pi?style=flat&colorA=222222&colorB=58A6FF" alt="License"></a>
+  <a href="https://github.com/can1357/oh-my-pi"><img src="https://img.shields.io/badge/upstream-can1357%2Foh--my--pi-58A6FF?style=flat&colorA=222222" alt="Upstream"></a>
   <a href="https://www.typescriptlang.org"><img src="https://img.shields.io/badge/TypeScript-3178C6?style=flat&colorA=222222&logo=typescript&logoColor=white" alt="TypeScript"></a>
   <a href="https://www.rust-lang.org"><img src="https://img.shields.io/badge/Rust-DEA584?style=flat&colorA=222222&logo=rust&logoColor=white" alt="Rust"></a>
   <a href="https://bun.sh"><img src="https://img.shields.io/badge/runtime-Bun-f472b6?style=flat&colorA=222222" alt="Bun"></a>
-  <a href="https://discord.gg/4NMW9cdXZa"><img src="https://img.shields.io/badge/Discord-5865F2?style=flat&colorA=222222&logo=discord&logoColor=white" alt="Discord"></a>
 </p>
 
-<p align="center">
-  Fork of <a href="https://github.com/badlogic/pi-mono">badlogic/pi-mono</a> by <a href="https://github.com/mariozechner">@mariozechner</a>
-</p>
+## Why This Fork
+
+This is an opinionated fork of [can1357/oh-my-pi](https://github.com/can1357/oh-my-pi) with structural changes that diverge too far from upstream for a PR:
+
+- **Removed plan mode** entirely -- the feature added complexity without proportional value in practice
+- **Removed worktree isolation** in task/subagent execution -- simplified the executor significantly (-2700 lines)
+- **Added Code Mode** -- LLM writes JS to orchestrate tools in a single round-trip instead of sequential tool calls
+- **Added undo_edit tool** -- allows the agent to revert its own edits
+- **Rewrote system prompt** -- conventions, git hygiene, SSH guidance, agency balance
+- **Ongoing dead code cleanup** -- removing unused types, rendering code, and stale references
+
+Upstream bug fixes are merged regularly via merge commits.
 
 ## Table of Contents
 
@@ -1256,13 +1261,13 @@ Works with session files and JSON event logs from `--mode json`.
 
 ## Philosophy
 
-omp is a fork of [pi-mono](https://github.com/badlogic/pi-mono) by [Mario Zechner](https://github.com/mariozechner), extended with a batteries-included coding workflow.
+omp originates from [pi-mono](https://github.com/badlogic/pi-mono) by [Mario Zechner](https://github.com/mariozechner), extended by [can1357](https://github.com/can1357) into a batteries-included coding agent. This fork strips out features that added complexity without clear payoff and adds opinionated improvements.
 
 Key ideas:
 
-- Keep interactive terminal-first UX for real coding work
-- Include practical built-ins (tools, sessions, branching, subagents, extensibility)
-- Make advanced behavior configurable rather than hidden
+- Terminal-first interactive UX for real coding work
+- Practical built-ins (tools, sessions, branching, subagents, extensibility)
+- Simplicity over configurability -- remove features rather than hide them behind flags
 
 ---
 
@@ -1304,5 +1309,4 @@ For architecture and contribution guidelines, see [packages/coding-agent/DEVELOP
 
 MIT. See [LICENSE](LICENSE).
 
-Copyright (c) 2025 Mario Zechner  
-Copyright (c) 2025-2026 Can Bölük
+Original work copyright (c) [Mario Zechner](https://github.com/mariozechner) and [Can Boluk](https://github.com/can1357).
