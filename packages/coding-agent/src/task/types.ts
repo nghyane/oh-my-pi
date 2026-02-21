@@ -7,15 +7,9 @@ import { type Static, Type } from "@sinclair/typebox";
 export type AgentSource = "bundled" | "user" | "project";
 
 const parseNumber = (value: string | undefined, defaultValue: number): number => {
-	if (value) {
-		try {
-			const number = Number.parseInt(value, 10);
-			if (!Number.isNaN(number) && number > 0) {
-				return number;
-			}
-		} catch {}
-	}
-	return defaultValue;
+	if (!value) return defaultValue;
+	const number = Number.parseInt(value, 10);
+	return Number.isNaN(number) || number <= 0 ? defaultValue : number;
 };
 
 /** Maximum output bytes per agent */
@@ -51,71 +45,23 @@ export const taskItemSchema = Type.Object({
 });
 export type TaskItem = Static<typeof taskItemSchema>;
 
-const createTaskSchema = (options: { isolationEnabled: boolean }) => {
-	const properties = {
-		agent: Type.String({ description: "Agent type for all tasks in this batch" }),
-		context: Type.Optional(
-			Type.String({
-				description:
-					"Shared background prepended to every task's assignment. Put goal, non-goals, constraints, conventions, reference paths, API contracts, and global acceptance commands here once — instead of duplicating across assignments.",
-			}),
-		),
-		schema: Type.Optional(
-			Type.Record(Type.String(), Type.Unknown(), {
-				description:
-					"JTD schema defining expected response structure. Use typed properties. Output format belongs here — never in context or assignment.",
-			}),
-		),
-		tasks: Type.Array(taskItemSchema, {
+export const taskSchema = Type.Object({
+	agent: Type.String({ description: "Agent type for all tasks in this batch" }),
+	context: Type.Optional(
+		Type.String({
 			description:
-				"Tasks to execute in parallel. Each must be small-scoped (3-5 files max) and self-contained given context + assignment.",
+				"Shared background prepended to every task's assignment. Put goal, non-goals, constraints, conventions, reference paths, and global acceptance commands here once — instead of duplicating across assignments.",
 		}),
-	};
+	),
+	tasks: Type.Array(taskItemSchema, {
+		description:
+			"Tasks to execute in parallel. Each must be small-scoped (3-5 files max) and self-contained given context + assignment.",
+	}),
+});
 
-	if (options.isolationEnabled) {
-		return Type.Object({
-			...properties,
-			isolated: Type.Optional(
-				Type.Boolean({
-					description: "Run in isolated git worktree; returns patches. Use when tasks edit overlapping files.",
-				}),
-			),
-		});
-	}
-
-	return Type.Object(properties);
-};
-
-export const taskSchema = createTaskSchema({ isolationEnabled: true });
-export const taskSchemaNoIsolation = createTaskSchema({ isolationEnabled: false });
-
-export type TaskSchema = typeof taskSchema | typeof taskSchemaNoIsolation;
+export type TaskSchema = typeof taskSchema;
 
 export type TaskParams = Static<TaskSchema>;
-
-/** A code review finding reported by the reviewer agent */
-export interface ReviewFinding {
-	title: string;
-	body: string;
-	priority: number;
-	confidence: number;
-	file_path: string;
-	line_start: number;
-	line_end: number;
-}
-
-/** Review summary submitted by the reviewer agent */
-export interface ReviewSummary {
-	overall_correctness: "correct" | "incorrect";
-	explanation: string;
-	confidence: number;
-}
-
-/** Structured review data extracted from reviewer agent */
-export interface ReviewData {
-	findings: ReviewFinding[];
-	summary?: ReviewSummary;
-}
 
 /** Agent definition (bundled or discovered) */
 export interface AgentDefinition {
@@ -123,10 +69,8 @@ export interface AgentDefinition {
 	description: string;
 	systemPrompt: string;
 	tools?: string[];
-	spawns?: string[] | "*";
 	model?: string[];
 	thinkingLevel?: ThinkingLevel;
-	output?: unknown;
 	source: AgentSource;
 	filePath?: string;
 }
@@ -136,7 +80,7 @@ export interface AgentProgress {
 	index: number;
 	id: string;
 	agent: string;
-	agentSource: AgentSource;
+	agentSource?: AgentSource;
 	status: "pending" | "running" | "completed" | "failed" | "aborted";
 	task: string;
 	description?: string;
@@ -149,9 +93,6 @@ export interface AgentProgress {
 	toolCount: number;
 	tokens: number;
 	durationMs: number;
-	modelOverride?: string | string[];
-	/** Data extracted by registered subprocess tool handlers (keyed by tool name) */
-	extractedToolData?: Record<string, unknown[]>;
 }
 
 /** Result from a single agent execution */
@@ -159,7 +100,7 @@ export interface SingleResult {
 	index: number;
 	id: string;
 	agent: string;
-	agentSource: AgentSource;
+	agentSource?: AgentSource;
 	task: string;
 	description?: string;
 	lastIntent?: string;
@@ -169,28 +110,21 @@ export interface SingleResult {
 	truncated: boolean;
 	durationMs: number;
 	tokens: number;
-	modelOverride?: string | string[];
 	error?: string;
 	aborted?: boolean;
 	/** Aggregated usage from the subprocess, accumulated incrementally from message_end events. */
 	usage?: Usage;
 	/** Output path for the task result */
 	outputPath?: string;
-	/** Patch path for isolated worktree output */
-	patchPath?: string;
-	/** Data extracted by registered subprocess tool handlers (keyed by tool name) */
-	extractedToolData?: Record<string, unknown[]>;
 	/** Output metadata for agent:// URL integration */
 	outputMeta?: { lineCount: number; charCount: number };
 }
 
 /** Tool details for TUI rendering */
 export interface TaskToolDetails {
-	projectAgentsDir: string | null;
 	results: SingleResult[];
 	totalDurationMs: number;
 	/** Aggregated usage across all subagents. */
 	usage?: Usage;
-	outputPaths?: string[];
 	progress?: AgentProgress[];
 }

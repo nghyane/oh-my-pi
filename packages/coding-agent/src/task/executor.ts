@@ -3,12 +3,10 @@
  *
  * Runs each subagent on the main thread and forwards AgentEvents for progress tracking.
  */
-import path from "node:path";
+import * as path from "node:path";
 import type { AgentEvent, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import type { Api, Model, ToolChoice } from "@oh-my-pi/pi-ai";
 import { logger, untilAborted } from "@oh-my-pi/pi-utils";
 import type { TSchema } from "@sinclair/typebox";
-import Ajv, { type ValidateFunction } from "ajv";
 import { ModelRegistry } from "../config/model-registry";
 import { resolveModelOverride } from "../config/model-resolver";
 import { type PromptTemplate, renderPromptTemplate } from "../config/prompt-templates";
@@ -17,14 +15,12 @@ import type { CustomTool } from "../extensibility/custom-tools/types";
 import type { Skill } from "../extensibility/skills";
 import { callTool } from "../mcp/client";
 import type { MCPManager } from "../mcp/manager";
-import submitReminderTemplate from "../prompts/system/subagent-submit-reminder.md" with { type: "text" };
 import subagentSystemPromptTemplate from "../prompts/system/subagent-system-prompt.md" with { type: "text" };
 import { createAgentSession, discoverAuthStorage } from "../sdk";
 import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
 import type { AuthStorage } from "../session/auth-storage";
 import { SessionManager } from "../session/session-manager";
 import { type ContextFileEntry, truncateTail } from "../tools";
-import { jtdToJsonSchema } from "../tools/jtd-to-json-schema";
 import { ToolAbortError } from "../tools/tool-errors";
 import type { EventBus } from "../utils/event-bus";
 import { subprocessToolRegistry } from "./subprocess-tool-registry";
@@ -33,14 +29,12 @@ import {
 	type AgentProgress,
 	MAX_OUTPUT_BYTES,
 	MAX_OUTPUT_LINES,
-	type ReviewFinding,
 	type SingleResult,
 	TASK_SUBAGENT_EVENT_CHANNEL,
 	TASK_SUBAGENT_PROGRESS_CHANNEL,
 } from "./types";
 
 const MCP_CALL_TIMEOUT_MS = 60_000;
-const ajv = new Ajv({ allErrors: true, strict: false });
 
 /** Agent event types to forward for progress tracking. */
 const agentEventTypes = new Set<AgentEvent["type"]>([
@@ -95,6 +89,7 @@ function withAbortTimeout<T>(promise: Promise<T>, timeoutMs: number, signal?: Ab
 	}
 
 	promise.then(resolve, reject).finally(() => {
+		settled = true;
 		if (signal) signal.removeEventListener("abort", onAbort);
 		clearTimeout(timeoutId);
 	});
@@ -102,40 +97,9 @@ function withAbortTimeout<T>(promise: Promise<T>, timeoutMs: number, signal?: Ab
 	return wrappedPromise;
 }
 
-function getReportFindingKey(value: unknown): string | null {
-	if (!value || typeof value !== "object") return null;
-	const record = value as Record<string, unknown>;
-	const title = typeof record.title === "string" ? record.title : null;
-	const filePath = typeof record.file_path === "string" ? record.file_path : null;
-	const lineStart = typeof record.line_start === "number" ? record.line_start : null;
-	const lineEnd = typeof record.line_end === "number" ? record.line_end : null;
-	const priority = typeof record.priority === "string" ? record.priority : null;
-	if (!title || !filePath || lineStart === null || lineEnd === null) {
-		return null;
-	}
-	return `${filePath}:${lineStart}:${lineEnd}:${priority ?? ""}:${title}`;
-}
-
-function buildSubmitResultToolChoice(model?: Model<Api>): ToolChoice | undefined {
-	if (!model) return undefined;
-	if (
-		model.api === "openai-codex-responses" ||
-		model.api === "openai-responses" ||
-		model.api === "openai-completions" ||
-		model.api === "azure-openai-responses"
-	) {
-		return { type: "function", name: "submit_result" };
-	}
-	if (model.api === "anthropic-messages" || model.api === "bedrock-converse-stream") {
-		return { type: "tool", name: "submit_result" };
-	}
-	return undefined;
-}
-
 /** Options for subagent execution */
 export interface ExecutorOptions {
 	cwd: string;
-	worktree?: string;
 	agent: AgentDefinition;
 	task: string;
 	description?: string;
@@ -143,8 +107,6 @@ export interface ExecutorOptions {
 	id: string;
 	modelOverride?: string | string[];
 	thinkingLevel?: ThinkingLevel;
-	outputSchema?: unknown;
-	/** Parent task recursion depth (0 = top-level, 1 = first child, etc.) */
 	taskDepth?: number;
 	enableLsp?: boolean;
 	signal?: AbortSignal;
@@ -163,181 +125,6 @@ export interface ExecutorOptions {
 	authStorage?: AuthStorage;
 	modelRegistry?: ModelRegistry;
 	settings?: Settings;
-}
-
-function parseStringifiedJson(value: unknown): unknown {
-	if (typeof value !== "string") return value;
-	const trimmed = value.trim();
-	if (!trimmed) return value;
-	if (!(trimmed.startsWith("{") || trimmed.startsWith("["))) return value;
-	try {
-		return JSON.parse(trimmed);
-	} catch {
-		return value;
-	}
-}
-
-function normalizeOutputSchema(schema: unknown): { normalized?: unknown; error?: string } {
-	if (schema === undefined || schema === null) return {};
-	if (typeof schema === "string") {
-		try {
-			return { normalized: JSON.parse(schema) };
-		} catch (err) {
-			return { error: err instanceof Error ? err.message : String(err) };
-		}
-	}
-	return { normalized: schema };
-}
-
-function buildOutputValidator(schema: unknown): { validate?: ValidateFunction; error?: string } {
-	const { normalized, error } = normalizeOutputSchema(schema);
-	if (error) return { error };
-	if (normalized === undefined) return {};
-	const jsonSchema = jtdToJsonSchema(normalized);
-	try {
-		return { validate: ajv.compile(jsonSchema as any) };
-	} catch (err) {
-		return { error: err instanceof Error ? err.message : String(err) };
-	}
-}
-
-function tryParseJsonOutput(text: string): unknown | undefined {
-	const trimmed = text.trim();
-	if (!trimmed) return undefined;
-	try {
-		return JSON.parse(trimmed);
-	} catch {
-		return undefined;
-	}
-}
-
-function extractCompletionData(parsed: unknown): unknown {
-	if (!parsed || typeof parsed !== "object") return parsed;
-	const record = parsed as Record<string, unknown>;
-	if ("data" in record) {
-		return record.data;
-	}
-	return parsed;
-}
-
-function normalizeCompleteData(data: unknown, reportFindings?: ReviewFinding[]): unknown {
-	let normalized = parseStringifiedJson(data ?? null);
-	if (
-		Array.isArray(reportFindings) &&
-		reportFindings.length > 0 &&
-		normalized &&
-		typeof normalized === "object" &&
-		!Array.isArray(normalized)
-	) {
-		const record = normalized as Record<string, unknown>;
-		if (!("findings" in record)) {
-			normalized = { ...record, findings: reportFindings };
-		}
-	}
-	return normalized;
-}
-
-function resolveFallbackCompletion(rawOutput: string, outputSchema: unknown): { data: unknown } | null {
-	const parsed = tryParseJsonOutput(rawOutput);
-	if (parsed === undefined) return null;
-	const candidate = parseStringifiedJson(extractCompletionData(parsed));
-	if (candidate === undefined) return null;
-	const { validate, error } = buildOutputValidator(outputSchema);
-	if (error) return null;
-	if (validate && !validate(candidate)) return null;
-	return { data: candidate };
-}
-
-export interface SubmitResultItem {
-	data?: unknown;
-	status?: "success" | "aborted";
-	error?: string;
-}
-
-interface FinalizeSubprocessOutputArgs {
-	rawOutput: string;
-	exitCode: number;
-	stderr: string;
-	doneAborted: boolean;
-	signalAborted: boolean;
-	submitResultItems?: SubmitResultItem[];
-	reportFindings?: ReviewFinding[];
-	outputSchema: unknown;
-}
-
-interface FinalizeSubprocessOutputResult {
-	rawOutput: string;
-	exitCode: number;
-	stderr: string;
-	abortedViaSubmitResult: boolean;
-	hasSubmitResult: boolean;
-}
-
-export const SUBAGENT_WARNING_NULL_SUBMIT_RESULT = "SYSTEM WARNING: Subagent called submit_result with null data.";
-export const SUBAGENT_WARNING_MISSING_SUBMIT_RESULT =
-	"SYSTEM WARNING: Subagent exited without calling submit_result tool after 3 reminders.";
-
-export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): FinalizeSubprocessOutputResult {
-	let { rawOutput, exitCode, stderr } = args;
-	const { submitResultItems, reportFindings, doneAborted, signalAborted, outputSchema } = args;
-	let abortedViaSubmitResult = false;
-	const hasSubmitResult = Array.isArray(submitResultItems) && submitResultItems.length > 0;
-
-	if (hasSubmitResult) {
-		const lastSubmitResult = submitResultItems[submitResultItems.length - 1];
-		if (lastSubmitResult?.status === "aborted") {
-			abortedViaSubmitResult = true;
-			exitCode = 0;
-			stderr = lastSubmitResult.error || "Subagent aborted task";
-			try {
-				rawOutput = JSON.stringify({ aborted: true, error: lastSubmitResult.error }, null, 2);
-			} catch {
-				rawOutput = `{"aborted":true,"error":"${lastSubmitResult.error || "Unknown error"}"}`;
-			}
-		} else {
-			const submitData = lastSubmitResult?.data;
-			if (submitData === null || submitData === undefined) {
-				rawOutput = rawOutput
-					? `${SUBAGENT_WARNING_NULL_SUBMIT_RESULT}\n\n${rawOutput}`
-					: SUBAGENT_WARNING_NULL_SUBMIT_RESULT;
-			} else {
-				const completeData = normalizeCompleteData(submitData, reportFindings);
-				try {
-					rawOutput = JSON.stringify(completeData, null, 2) ?? "null";
-				} catch (err) {
-					const errorMessage = err instanceof Error ? err.message : String(err);
-					rawOutput = `{"error":"Failed to serialize submit_result data: ${errorMessage}"}`;
-				}
-				exitCode = 0;
-				stderr = "";
-			}
-		}
-	} else {
-		const allowFallback = exitCode === 0 && !doneAborted && !signalAborted;
-		const { normalized: normalizedSchema, error: schemaError } = normalizeOutputSchema(outputSchema);
-		const hasOutputSchema = normalizedSchema !== undefined && !schemaError;
-		const fallback = allowFallback ? resolveFallbackCompletion(rawOutput, outputSchema) : null;
-		if (fallback) {
-			const completeData = normalizeCompleteData(fallback.data, reportFindings);
-			try {
-				rawOutput = JSON.stringify(completeData, null, 2) ?? "null";
-			} catch (err) {
-				const errorMessage = err instanceof Error ? err.message : String(err);
-				rawOutput = `{"error":"Failed to serialize fallback completion: ${errorMessage}"}`;
-			}
-			exitCode = 0;
-			stderr = "";
-		} else if (!hasOutputSchema && allowFallback && rawOutput.trim().length > 0) {
-			exitCode = 0;
-			stderr = "";
-		} else if (exitCode === 0) {
-			rawOutput = rawOutput
-				? `${SUBAGENT_WARNING_MISSING_SUBMIT_RESULT}\n\n${rawOutput}`
-				: SUBAGENT_WARNING_MISSING_SUBMIT_RESULT;
-		}
-	}
-
-	return { rawOutput, exitCode, stderr, abortedViaSubmitResult, hasSubmitResult };
 }
 
 /**
@@ -445,21 +232,8 @@ function createMCPProxyTools(mcpManager: MCPManager): CustomTool<TSchema>[] {
 /**
  * Run a single agent in-process.
  */
-export async function runSubprocess(options: ExecutorOptions): Promise<SingleResult> {
-	const {
-		cwd,
-		agent,
-		task,
-		index,
-		id,
-		worktree,
-		modelOverride,
-		thinkingLevel,
-		outputSchema,
-		enableLsp,
-		signal,
-		onProgress,
-	} = options;
+export async function runAgent(options: ExecutorOptions): Promise<SingleResult> {
+	const { cwd, agent, task, index, id, modelOverride, thinkingLevel, enableLsp, signal, onProgress } = options;
 	const startTime = Date.now();
 
 	// Initialize progress
@@ -467,7 +241,6 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		index,
 		id,
 		agent: agent.name,
-		agentSource: agent.source,
 		status: "running",
 		task,
 		description: options.description,
@@ -477,7 +250,6 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		toolCount: 0,
 		tokens: 0,
 		durationMs: 0,
-		modelOverride,
 	};
 
 	// Check if already aborted
@@ -486,7 +258,6 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			index,
 			id,
 			agent: agent.name,
-			agentSource: agent.source,
 			task,
 			description: options.description,
 			exitCode: 1,
@@ -495,7 +266,6 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			truncated: false,
 			durationMs: 0,
 			tokens: 0,
-			modelOverride,
 			error: "Aborted",
 		};
 	}
@@ -507,23 +277,10 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	}
 
 	const settings = options.settings ?? Settings.isolated();
-	const maxRecursionDepth = settings.get("task.maxRecursionDepth") ?? 2;
-	const parentDepth = options.taskDepth ?? 0;
-	const childDepth = parentDepth + 1;
-	const atMaxDepth = maxRecursionDepth >= 0 && childDepth >= maxRecursionDepth;
-
-	// Add tools if specified
+	// Sub-agents never get the task tool — no recursive nesting
 	let toolNames: string[] | undefined;
 	if (agent.tools && agent.tools.length > 0) {
-		toolNames = agent.tools;
-		// Auto-include task tool if spawns defined but task not in tools
-		if (agent.spawns !== undefined && !toolNames.includes("task") && !atMaxDepth) {
-			toolNames = [...toolNames, "task"];
-		}
-	}
-
-	if (atMaxDepth && toolNames?.includes("task")) {
-		toolNames = toolNames.filter(name => name !== "task");
+		toolNames = agent.tools.filter(name => name !== "task");
 	}
 	const pythonToolMode = settings.get("python.toolMode") ?? "both";
 	if (toolNames?.includes("exec")) {
@@ -540,13 +297,6 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 
 	const modelPatterns = normalizeModelPatterns(modelOverride ?? agent.model);
 	const sessionFile = subtaskSessionFile ?? null;
-	const spawnsEnv = atMaxDepth
-		? ""
-		: agent.spawns === undefined
-			? ""
-			: agent.spawns === "*"
-				? "*"
-				: agent.spawns.join(",");
 
 	const lspEnabled = enableLsp ?? true;
 	const skipPythonPreflight = Array.isArray(toolNames) && !toolNames.includes("python");
@@ -566,7 +316,6 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	const abortSignal = abortController.signal;
 	let activeSession: AgentSession | null = null;
 	let unsubscribe: (() => void) | null = null;
-	let submitResultCalled = false;
 
 	// Accumulate usage incrementally from message_end events (no memory for streaming events)
 	const accumulatedUsage = {
@@ -614,7 +363,6 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			options.eventBus.emit(TASK_SUBAGENT_PROGRESS_CHANNEL, {
 				index,
 				agent: agent.name,
-				agentSource: agent.source,
 				task,
 				progress: { ...progress },
 			});
@@ -703,7 +451,6 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			options.eventBus.emit(TASK_SUBAGENT_EVENT_CHANNEL, {
 				index,
 				agent: agent.name,
-				agentSource: agent.source,
 				task,
 				event,
 			});
@@ -720,6 +467,8 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				break;
 
 			case "tool_execution_start": {
+				// Skip Code Mode sub-tool events — they inflate toolCount and corrupt currentTool tracking
+				if (event.parentToolCallId) break;
 				progress.toolCount++;
 				progress.currentTool = event.toolName;
 				progress.currentToolArgs = extractToolArgsPreview(
@@ -734,6 +483,8 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			}
 
 			case "tool_execution_end": {
+				// Skip Code Mode sub-tool events
+				if (event.parentToolCallId) break;
 				if (progress.currentTool) {
 					progress.recentTools.unshift({
 						tool: progress.currentTool,
@@ -753,36 +504,6 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				const handler = subprocessToolRegistry.getHandler(event.toolName);
 				const eventArgs = (event as { args?: Record<string, unknown> }).args ?? {};
 				if (handler) {
-					// Extract data using handler
-					if (handler.extractData) {
-						const data = handler.extractData({
-							toolName: event.toolName,
-							toolCallId: event.toolCallId,
-							args: eventArgs,
-							result: event.result,
-							isError: event.isError,
-						});
-						if (data !== undefined) {
-							progress.extractedToolData = progress.extractedToolData || {};
-							const existing = progress.extractedToolData[event.toolName] || [];
-							const findingKey = event.toolName === "report_finding" ? getReportFindingKey(data) : null;
-							if (findingKey) {
-								const existingIndex = existing.findIndex(item => getReportFindingKey(item) === findingKey);
-								if (existingIndex >= 0) {
-									existing[existingIndex] = data;
-								} else {
-									existing.push(data);
-								}
-							} else {
-								existing.push(data);
-							}
-							progress.extractedToolData[event.toolName] = existing;
-							if (event.toolName === "submit_result") {
-								submitResultCalled = true;
-							}
-						}
-					}
-
 					// Check if handler wants to terminate the session
 					if (
 						handler.shouldTerminate?.({
@@ -919,25 +640,19 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			);
 			const effectiveThinkingLevel = thinkingLevel ?? resolvedThinkingLevel;
 
-			const sessionManager = sessionFile
-				? await SessionManager.open(sessionFile)
-				: SessionManager.inMemory(worktree ?? cwd);
+			const sessionManager = sessionFile ? await SessionManager.open(sessionFile) : SessionManager.inMemory(cwd);
 
 			const mcpProxyTools = options.mcpManager ? createMCPProxyTools(options.mcpManager) : [];
 			const enableMCP = !options.mcpManager;
 
-			const { normalized: normalizedOutputSchema } = normalizeOutputSchema(outputSchema);
-
 			const { session } = await createAgentSession({
-				cwd: worktree ?? cwd,
+				cwd,
 				authStorage,
 				modelRegistry,
 				settings,
 				model,
 				thinkingLevel: effectiveThinkingLevel,
 				toolNames,
-				outputSchema,
-				requireSubmitResultTool: true,
 				contextFiles: options.contextFiles,
 				skills: options.skills,
 				preloadedSkills: options.preloadedSkills,
@@ -946,18 +661,17 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					renderPromptTemplate(subagentSystemPromptTemplate, {
 						base: defaultPrompt,
 						agent: agent.systemPrompt,
-						worktree: worktree ?? "",
-						outputSchema: normalizedOutputSchema,
 						contextFile: options.contextFile,
 					}),
 				sessionManager,
 				hasUI: false,
-				spawns: spawnsEnv,
-				taskDepth: childDepth,
+				spawns: "",
+				taskDepth: (options.taskDepth ?? 0) + 1,
 				parentTaskPrefix: id,
 				enableLsp: lspEnabled,
 				skipPythonPreflight,
 				enableMCP,
+				lightweightStartup: true,
 				customTools: mcpProxyTools.length > 0 ? mcpProxyTools : undefined,
 			});
 
@@ -974,7 +688,6 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				systemPrompt: session.agent.state.systemPrompt,
 				task,
 				tools: session.getActiveToolNames(),
-				outputSchema,
 			});
 
 			abortSignal.addEventListener(
@@ -1047,7 +760,6 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				await extensionRunner.emit({ type: "session_start" });
 			}
 
-			const MAX_SUBMIT_RESULT_RETRIES = 3;
 			unsubscribe = session.subscribe(event => {
 				if (isAgentEvent(event)) {
 					try {
@@ -1062,31 +774,6 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			});
 
 			await session.prompt(task);
-
-			const reminderToolChoice = buildSubmitResultToolChoice(session.model);
-
-			let retryCount = 0;
-			while (!submitResultCalled && retryCount < MAX_SUBMIT_RESULT_RETRIES && !abortSignal.aborted) {
-				try {
-					retryCount++;
-					const reminder = renderPromptTemplate(submitReminderTemplate, {
-						retryCount,
-						maxRetries: MAX_SUBMIT_RESULT_RETRIES,
-					});
-
-					await session.prompt(reminder, reminderToolChoice ? { toolChoice: reminderToolChoice } : undefined);
-				} catch (err) {
-					logger.error("Subagent prompt failed", {
-						error: err instanceof Error ? err.message : String(err),
-					});
-				}
-			}
-
-			if (!submitResultCalled && !abortSignal.aborted) {
-				aborted = true;
-				exitCode = 1;
-				error ??= SUBAGENT_WARNING_MISSING_SUBMIT_RESULT;
-			}
 
 			const lastMessage = session.state.messages[session.state.messages.length - 1];
 			if (lastMessage?.role === "assistant") {
@@ -1145,29 +832,13 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		progressTimeoutId = null;
 	}
 
-	let exitCode = done.exitCode;
+	const exitCode = done.exitCode;
 	if (done.error) {
 		stderr = done.error;
 	}
 
 	// Use final output if available, otherwise accumulated output
-	let rawOutput = finalOutputChunks.length > 0 ? finalOutputChunks.join("") : outputChunks.join("");
-	const submitResultItems = progress.extractedToolData?.submit_result as SubmitResultItem[] | undefined;
-	const reportFindings = progress.extractedToolData?.report_finding as ReviewFinding[] | undefined;
-	const finalized = finalizeSubprocessOutput({
-		rawOutput,
-		exitCode,
-		stderr,
-		doneAborted: Boolean(done.aborted),
-		signalAborted: Boolean(signal?.aborted),
-		submitResultItems,
-		reportFindings,
-		outputSchema,
-	});
-	rawOutput = finalized.rawOutput;
-	exitCode = finalized.exitCode;
-	stderr = finalized.stderr;
-	const { abortedViaSubmitResult, hasSubmitResult } = finalized;
+	const rawOutput = finalOutputChunks.length > 0 ? finalOutputChunks.join("") : outputChunks.join("");
 	const { content: truncatedOutput, truncated } = truncateTail(rawOutput, {
 		maxBytes: MAX_OUTPUT_BYTES,
 		maxLines: MAX_OUTPUT_LINES,
@@ -1191,7 +862,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	}
 
 	// Update final progress
-	const wasAborted = abortedViaSubmitResult || (!hasSubmitResult && (done.aborted || signal?.aborted || false));
+	const wasAborted = done.aborted || signal?.aborted || false;
 	progress.status = wasAborted ? "aborted" : exitCode === 0 ? "completed" : "failed";
 	scheduleProgress(true);
 
@@ -1199,7 +870,6 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		index,
 		id,
 		agent: agent.name,
-		agentSource: agent.source,
 		task,
 		description: options.description,
 		lastIntent: progress.lastIntent,
@@ -1209,12 +879,10 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		truncated,
 		durationMs: Date.now() - startTime,
 		tokens: progress.tokens,
-		modelOverride,
 		error: exitCode !== 0 && stderr ? stderr : undefined,
 		aborted: wasAborted,
 		usage: hasUsage ? accumulatedUsage : undefined,
 		outputPath,
-		extractedToolData: progress.extractedToolData,
 		outputMeta,
 	};
 }

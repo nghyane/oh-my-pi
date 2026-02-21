@@ -75,7 +75,7 @@ Explicitly exclude tempting scope — what tasks must not touch/attempt.
 ````
 **Belongs in `context`**: task-specific goal, non-goals, session decisions, reference paths, shared type definitions, API contracts, global acceptance commands — anything 2+ tasks need that isn't already in AGENTS.md.
 **Rule of thumb:** if repeat in 2+ tasks, belongs in `context`.
-**Does NOT belong in `context`**: project rules already in AGENTS.md/context files, per-task file lists, one-off requirements (go in `assignment`), structured output format (goes in `schema`).
+**Does NOT belong in `context`**: project rules already in AGENTS.md/context files, per-task file lists, one-off requirements (go in `assignment`), and strict response contracts that only apply to one task.
 
 ### `tasks` (required)
 
@@ -88,18 +88,7 @@ Array tasks execute in parallel.
 |`assignment`|✓|Complete per-task instructions. See [Writing an assignment](#writing-an-assignment).|
 |`skills`||Skill names preload. Use only when changes correctness — don’t spam every task.|
 
-{{#if isolationEnabled}}
-### `isolated` (optional)
-
-Run in isolated git worktree; returns patches. Use when tasks edit overlapping files or when you want clean per-task diffs.
-{{/if}}
-### `schema` (optional — recommended for structured output)
-
-JTD schema defining expected response structure. Use typed properties. If you care about parsing result, define here — **never describe output format in `context` or `assignment`**.
-
-<caution>
-**Schema vs agent mismatch causes null output.** Agents with `output="structured"` (e.g., `explore`) have a built-in schema. If you also pass `schema`, yours takes precedence — but if you describe output format in `context`/`assignment` instead, the agent's built-in schema wins. The agent gets confused trying to fit your requested format into its schema shape and submits `null`. Either: (1) use `schema` to override the built-in one, (2) use `task` agent which has no built-in schema, or (3) match your instructions to the agent's expected output shape.
-</caution>
+Outputs are free-form text/JSON from each subtask. If you need strict structure, define it clearly inside each `assignment` and validate at the caller.
 ---
 
 ## Writing an assignment
@@ -151,8 +140,6 @@ Use structure every assignment:
 If a constraint appears in AGENTS.md, it MUST NOT appear in `context`. The subagent has the full system prompt.
 
 If tempted to write above, expand using templates.
-**Output format in prose instead of `schema`** — agent returns null:
-Structured agents (`explore`, `reviewer`) have built-in output schemas. Describing a different output format in `context`/`assignment` without overriding via `schema` creates a mismatch — the agent can't reconcile your prose instructions with its schema and submits null data. Always use `schema` for output structure, or pick an agent whose built-in schema matches your needs.
 **Test/lint commands in parallel tasks** — edit wars:
 Parallel agents share working tree. If two agents run `bun check` or `bun test` concurrently, they see each other's half-finished edits, "fix" phantom errors, loop. **Never tell parallel tasks run project-wide build/test/lint commands.** Each task edits, stops. Caller verifies after all tasks complete.
 **If you can't specify scope yet**, create **Discovery task** first: enumerate files, find callsites, list candidates. Then fan out with explicit paths.
@@ -290,7 +277,6 @@ Before calling tool, verify:
 - [ ] Tasks truly parallel (no hidden dependencies)
 - [ ] Scope small, file paths explicit (no globs)
 - [ ] No task runs project-wide build/test/lint — you do after all tasks complete
-- [ ] `schema` used if you expect information
 ---
 
 ## Agents

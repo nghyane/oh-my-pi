@@ -19,7 +19,6 @@ interface AgentFrontmatter {
 	name: string;
 	description: string;
 	tools?: string[];
-	spawns?: string;
 	model?: string | string[];
 	thinkingLevel?: string;
 }
@@ -46,7 +45,6 @@ const EMBEDDED_AGENT_DEFS: EmbeddedAgentDef[] = [
 		frontmatter: {
 			name: "task",
 			description: "General-purpose subagent with full capabilities for delegated multi-step tasks",
-			spawns: "*",
 			model: "default",
 			thinkingLevel: "medium",
 		},
