@@ -5,7 +5,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { getCrashLogPath, getDebugLogPath } from "@nghyane/pi-utils/dirs";
 import { isKeyRelease, matchesKey } from "./keys";
-import type { Terminal } from "./terminal";
+import { SCROLL_DOWN, SCROLL_UP, type Terminal } from "./terminal";
 import { setCellDimensions, TERMINAL } from "./terminal-capabilities";
 import { extractSegments, sliceByColumn, sliceWithWidth, visibleWidth } from "./utils";
 
@@ -220,6 +220,11 @@ export class TUI extends Container {
 	#fullRedrawCount = 0;
 	#clearScrollbackOnNextFullRender = false;
 	#stopped = false;
+	#scrollOffset = 0; // Lines scrolled up from bottom (0 = live, >0 = scrolled back)
+	#scrollLines = 3; // Lines to scroll per wheel event
+	#scrollPending = 0; // Accumulated scroll delta waiting to flush
+	#scrollFlushScheduled = false; // Whether a flush is scheduled on next tick
+	#fullRenderCache: string[] = []; // Cached full render output for native scroll
 
 	// Overlay stack for modal components rendered on top of base content
 	overlayStack: {
@@ -441,7 +446,90 @@ export class TUI extends Container {
 		});
 	}
 
+	/**
+	 * Scroll viewport using native terminal scroll commands (CSI S / CSI T).
+	 * Positive delta = scroll up (view earlier content), negative = scroll down.
+	 * No component re-render — reads from #fullRenderCache.
+	 */
+	#nativeScroll(delta: number): void {
+		const cache = this.#fullRenderCache;
+		const height = this.terminal.rows;
+		if (cache.length <= height) return; // Nothing to scroll
+
+		const maxScroll = cache.length - height;
+		const prevOffset = this.#scrollOffset;
+		this.#scrollOffset = Math.max(0, Math.min(maxScroll, this.#scrollOffset + delta));
+		const actualDelta = this.#scrollOffset - prevOffset;
+		if (actualDelta === 0) return;
+
+		const absDelta = Math.abs(actualDelta);
+		const viewportStart = cache.length - height - this.#scrollOffset;
+
+		// Use synchronized output to prevent tearing
+		let buffer = "\x1b[?2026h";
+
+		if (absDelta >= height) {
+			// Full viewport change — redraw everything
+			buffer += "\x1b[H"; // Home
+			for (let i = 0; i < height; i++) {
+				if (i > 0) buffer += "\r\n";
+				buffer += `\x1b[2K${cache[viewportStart + i]}`;
+			}
+		} else if (actualDelta > 0) {
+			// Scrolling up — content moves down, new lines appear at top
+			buffer += `\x1b[${absDelta}T`; // Scroll down (pan up)
+			buffer += "\x1b[H"; // Move to top
+			for (let i = 0; i < absDelta; i++) {
+				if (i > 0) buffer += "\r\n";
+				buffer += `\x1b[2K${cache[viewportStart + i]}`;
+			}
+		} else {
+			// Scrolling down — content moves up, new lines appear at bottom
+			buffer += `\x1b[${absDelta}S`; // Scroll up (pan down)
+			// Move to bottom rows
+			buffer += `\x1b[${height - absDelta + 1};1H`;
+			for (let i = 0; i < absDelta; i++) {
+				if (i > 0) buffer += "\r\n";
+				const lineIdx = viewportStart + height - absDelta + i;
+				buffer += `\x1b[2K${cache[lineIdx]}`;
+			}
+		}
+
+		// Hide cursor while scrolled back
+		buffer += "\x1b[?25l";
+		buffer += "\x1b[?2026l";
+		this.terminal.write(buffer);
+
+		// Update tracking — set previousLines to the visible slice so diff engine stays in sync
+		this.#previousLines = cache.slice(viewportStart, viewportStart + height);
+		this.#hardwareCursorRow = Math.max(0, this.#previousLines.length - 1);
+		this.#cursorRow = this.#hardwareCursorRow;
+		this.#maxLinesRendered = height;
+		this.#previousViewportTop = 0;
+	}
+
 	#handleInput(data: string): void {
+		// Handle scroll wheel events — batch and flush on next tick
+		if (data === SCROLL_UP || data === SCROLL_DOWN) {
+			this.#scrollPending += data === SCROLL_UP ? this.#scrollLines : -this.#scrollLines;
+			if (!this.#scrollFlushScheduled) {
+				this.#scrollFlushScheduled = true;
+				process.nextTick(() => {
+					this.#scrollFlushScheduled = false;
+					const delta = this.#scrollPending;
+					this.#scrollPending = 0;
+					if (delta !== 0) this.#nativeScroll(delta);
+				});
+			}
+			return;
+		}
+		// Any other input resets scroll to bottom (live mode)
+		// Force full re-render to resync diff engine state with terminal
+		if (this.#scrollOffset > 0) {
+			this.#scrollOffset = 0;
+			this.requestRender(true);
+		}
+
 		if (this.#inputListeners.size > 0) {
 			let current = data;
 			for (const listener of this.#inputListeners) {
@@ -874,6 +962,37 @@ export class TUI extends Container {
 		const cursorPos = this.#extractCursorPosition(newLines, height);
 
 		newLines = this.#applyLineResets(newLines);
+
+		// Cache full render output for native scroll
+		const prevCacheLength = this.#fullRenderCache.length;
+		this.#fullRenderCache = newLines.slice();
+
+		// Anchor viewport when content grows while scrolled back
+		if (this.#scrollOffset > 0) {
+			const growth = newLines.length - prevCacheLength;
+			if (growth > 0) {
+				this.#scrollOffset += growth;
+			}
+			const maxScroll = Math.max(0, newLines.length - height);
+			this.#scrollOffset = Math.min(this.#scrollOffset, maxScroll);
+			// Redraw visible viewport from updated cache
+			const viewportStart = newLines.length - height - this.#scrollOffset;
+			const visibleLines = newLines.slice(viewportStart, viewportStart + height);
+			let buffer = "\x1b[?2026h\x1b[H";
+			for (let i = 0; i < visibleLines.length; i++) {
+				if (i > 0) buffer += "\r\n";
+				buffer += `\x1b[2K${visibleLines[i]}`;
+			}
+			buffer += "\x1b[?25l\x1b[?2026l";
+			this.terminal.write(buffer);
+			this.#previousLines = visibleLines;
+			this.#hardwareCursorRow = Math.max(0, visibleLines.length - 1);
+			this.#cursorRow = this.#hardwareCursorRow;
+			this.#maxLinesRendered = height;
+			this.#previousViewportTop = 0;
+			this.#previousWidth = width;
+			return;
+		}
 
 		// Width changed - need full re-render (line wrapping changes)
 		const widthChanged = this.#previousWidth !== 0 && this.#previousWidth !== width;

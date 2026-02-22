@@ -6,15 +6,7 @@ import * as path from "node:path";
 import type { Agent, AgentMessage } from "@nghyane/pi-agent-core";
 import type { AssistantMessage, ImageContent, Message, UsageReport } from "@nghyane/pi-ai";
 import type { Component, Loader, SlashCommand } from "@nghyane/pi-tui";
-import {
-	CombinedAutocompleteProvider,
-	Container,
-	Markdown,
-	ProcessTerminal,
-	Spacer,
-	Text,
-	TUI,
-} from "@nghyane/pi-tui";
+import { CombinedAutocompleteProvider, Container, Markdown, ProcessTerminal, Spacer, Text, TUI } from "@nghyane/pi-tui";
 import { hsvToRgb, isEnoent, logger, postmortem } from "@nghyane/pi-utils";
 import { APP_NAME, getProjectDir } from "@nghyane/pi-utils/dirs";
 import chalk from "chalk";

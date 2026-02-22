@@ -4,6 +4,10 @@ import { $env, logger } from "@nghyane/pi-utils";
 import { setKittyProtocolActive } from "./keys";
 import { StdinBuffer } from "./stdin-buffer";
 
+// Internal scroll sequences emitted by mouse wheel events
+export const SCROLL_UP = "\x1b[<64~";
+export const SCROLL_DOWN = "\x1b[<65~";
+
 /**
  * Minimal terminal interface for TUI
  */
@@ -30,7 +34,9 @@ export function emergencyTerminalRestore(): void {
 			// This avoids writing escape sequences for non-TUI commands (grep, commit, etc.)
 			process.stdout.write(
 				"\x1b[?2004l" + // Disable bracketed paste
+					"\x1b[?1006l\x1b[?1000l" + // Disable mouse tracking
 					"\x1b[<u" + // Pop kitty keyboard protocol
+					"\x1b[?1049l" + // Leave alternate screen buffer
 					"\x1b[?25h", // Show cursor
 			);
 			if (process.stdin.setRawMode) {
@@ -115,6 +121,12 @@ export class ProcessTerminal implements Terminal {
 		}
 		process.stdin.setEncoding("utf8");
 		process.stdin.resume();
+
+		// Enter alternate screen buffer — keeps TUI output out of scrollback
+		this.#safeWrite("\x1b[?1049h");
+
+		// Enable mouse tracking (button events + SGR encoding) for scroll wheel support
+		this.#safeWrite("\x1b[?1000h\x1b[?1006h");
 
 		// Enable bracketed paste mode - terminal will wrap pastes in \x1b[200~ ... \x1b[201~
 		this.#safeWrite("\x1b[?2004h");
@@ -203,6 +215,9 @@ export class ProcessTerminal implements Terminal {
 		// Kitty protocol response pattern: \x1b[?<flags>u
 		const kittyResponsePattern = /^\x1b\[\?(\d+)u$/;
 
+		// SGR mouse sequence pattern: \x1b[<button;col;rowM or \x1b[<button;col;rowm
+		const sgrMousePattern = /^\x1b\[<(\d+);\d+;\d+[Mm]$/;
+
 		// Forward individual sequences to the input handler
 		this.#stdinBuffer.on("data", (sequence: string) => {
 			// Check for Kitty protocol response (only if not already enabled)
@@ -219,6 +234,21 @@ export class ProcessTerminal implements Terminal {
 					this.#safeWrite("\x1b[>7u");
 					return; // Don't forward protocol response to TUI
 				}
+			}
+
+			// Handle mouse events — emit internal scroll sequences, drop the rest
+			const sgrMatch = sequence.match(sgrMousePattern);
+			if (sgrMatch) {
+				const button = Number.parseInt(sgrMatch[1], 10);
+				// SGR button 64 = scroll up, 65 = scroll down → internal sequences
+				if ((button === 64 || button === 65) && this.#inputHandler) {
+					this.#inputHandler(button === 64 ? SCROLL_UP : SCROLL_DOWN);
+				}
+				return; // Drop all other mouse events
+			}
+			// Drop legacy X10 mouse sequences
+			if (sequence.startsWith("\x1b[M") && sequence.length === 6) {
+				return;
 			}
 
 			if (this.#inputHandler) {
@@ -297,6 +327,9 @@ export class ProcessTerminal implements Terminal {
 		// Disable bracketed paste mode
 		this.#safeWrite("\x1b[?2004l");
 
+		// Disable mouse tracking
+		this.#safeWrite("\x1b[?1006l\x1b[?1000l");
+
 		// Disable Kitty keyboard protocol if not already done by drainInput()
 		if (this.#kittyProtocolActive) {
 			this.#safeWrite("\x1b[<u");
@@ -331,6 +364,9 @@ export class ProcessTerminal implements Terminal {
 		if (process.stdin.setRawMode) {
 			process.stdin.setRawMode(this.#wasRaw);
 		}
+
+		// Leave alternate screen buffer and show cursor (must be last — restores normal screen)
+		this.#safeWrite("\x1b[?1049l\x1b[?25h");
 	}
 
 	write(data: string): void {
