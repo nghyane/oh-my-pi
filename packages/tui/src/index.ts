@@ -7,6 +7,8 @@ export {
 	CombinedAutocompleteProvider,
 	type SlashCommand,
 } from "./autocomplete";
+// Cell-based buffer rendering
+export * from "./buffer/index";
 // Components
 export { Box } from "./components/box";
 export { CancellableLoader } from "./components/cancellable-loader";
