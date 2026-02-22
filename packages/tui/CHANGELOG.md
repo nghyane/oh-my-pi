@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added cell-based double buffer rendering with ANSI bridge for efficient terminal output
+- Added alternate screen, mouse scroll, and synchronized output support
+- Added auto-scroll when dragging selection at viewport edges
+
 ## [12.18.0] - 2026-02-21
 ### Fixed
 

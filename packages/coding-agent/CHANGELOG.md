@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Consolidated truncation logic into streaming-output module for consistent output handling across tools
+
 ## [12.18.1] - 2026-02-21
 ### Added
 
