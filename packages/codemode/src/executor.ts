@@ -71,19 +71,30 @@ export async function execute(
 		},
 	});
 
-	// Captured console for sandboxed code
+	const formatArg = (v: unknown): string => {
+		if (v === null || v === undefined || typeof v === "string" || typeof v === "number" || typeof v === "boolean") {
+			return String(v);
+		}
+		try {
+			return JSON.stringify(v, null, 2);
+		} catch {
+			return String(v);
+		}
+	};
+	const formatArgs = (args: unknown[]) => args.map(formatArg).join(" ");
+
 	const sandboxConsole = {
 		log: (...args: unknown[]) => {
-			logs.push(args.map(String).join(" "));
+			logs.push(formatArgs(args));
 		},
 		warn: (...args: unknown[]) => {
-			logs.push(`[warn] ${args.map(String).join(" ")}`);
+			logs.push(`[warn] ${formatArgs(args)}`);
 		},
 		error: (...args: unknown[]) => {
-			logs.push(`[error] ${args.map(String).join(" ")}`);
+			logs.push(`[error] ${formatArgs(args)}`);
 		},
 		info: (...args: unknown[]) => {
-			logs.push(args.map(String).join(" "));
+			logs.push(formatArgs(args));
 		},
 	};
 
@@ -92,10 +103,16 @@ export async function execute(
 		if (!persistentState.has(key)) {
 			persistentState.set(
 				key,
-				fn().then(v => {
-					persistentState.set(key, v);
-					return v;
-				}),
+				fn().then(
+					v => {
+						persistentState.set(key, v);
+						return v;
+					},
+					err => {
+						persistentState.delete(key);
+						throw err;
+					},
+				),
 			);
 		}
 		return persistentState.get(key);
@@ -104,33 +121,13 @@ export async function execute(
 	const cleanups: (() => void)[] = [];
 	let resultPromise: Promise<unknown> | undefined;
 	try {
-		// Build an async function that receives codemode and console as params.
-		// Shadow dangerous globals (process, require, Bun, globalThis, global)
-		// to limit the API surface available to sandboxed code.
-		const fn = new AsyncFunction(
-			"codemode",
-			"console",
-			"state",
-			"memo",
-			"process",
-			"require",
-			"Bun",
-			"globalThis",
-			"global",
-			`const __fn = ${code};\nreturn await __fn();`,
-		);
+		// Parameters: injected globals first, then shadowed globals (set to undefined).
+		// Keep params/args arrays in sync to avoid positional mismatches.
+		const params = ["codemode", "console", "state", "memo", "process", "require", "Bun", "globalThis", "global"];
+		const args = [codemode, sandboxConsole, persistentState, memo];
 
-		resultPromise = fn(
-			codemode,
-			sandboxConsole,
-			persistentState,
-			memo,
-			undefined,
-			undefined,
-			undefined,
-			undefined,
-			undefined,
-		);
+		const fn = new AsyncFunction(...params, `const __fn = ${code};\nreturn await __fn();`);
+		resultPromise = fn(...args);
 
 		// NOTE: This timeout only works for async/awaiting code. Synchronous infinite
 		// loops (e.g. `while(true){}`) block the event loop and prevent the timeout

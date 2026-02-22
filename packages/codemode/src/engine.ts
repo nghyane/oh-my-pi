@@ -26,6 +26,9 @@ const codeSchema = Type.Object({
 /** Tools excluded from Code Mode wrapping (interactive, orchestration, or lifecycle tools) */
 const EXCLUDED_TOOLS = new Set(["ask", "submit_result", "task", "todo_write"]);
 
+/** Max characters to include from code execution result in the tool response */
+const MAX_RESULT_LENGTH = 4000;
+
 export interface CodeToolOptions {
 	/** Additional tool names to exclude from Code Mode */
 	excludeTools?: string[];
@@ -224,7 +227,6 @@ export function createCodeTool(
 			if (result.result !== undefined && result.result !== null) {
 				const resultStr =
 					typeof result.result === "string" ? result.result : JSON.stringify(result.result, null, 2);
-				const MAX_RESULT_LENGTH = 4000;
 				if (resultStr.length <= MAX_RESULT_LENGTH) {
 					parts.push(resultStr);
 				} else {
