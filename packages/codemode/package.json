@@ -1,6 +1,6 @@
 {
 	"name": "@nghyane/pi-codemode",
-	"version": "12.18.4",
+	"version": "12.19.0",
 	"description": "Code Mode: convert tool-calling into TypeScript code generation for LLM orchestration",
 	"type": "module",
 	"main": "./src/index.ts",

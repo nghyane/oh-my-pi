@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [12.19.0] - 2026-02-22
+
 ### Added
 
 - Added cell-based double buffer rendering with ANSI bridge for efficient terminal output
