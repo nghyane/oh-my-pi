@@ -39,7 +39,7 @@
 		"code-generation"
 	],
 	"author": "Can Bölük",
-	"license": "MIT",
+	"license": "GPL-3.0-or-later",
 	"repository": {
 		"type": "git",
 		"url": "git+https://github.com/can1357/oh-my-pi.git",
