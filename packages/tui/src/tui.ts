@@ -230,6 +230,7 @@ export class TUI extends Container {
 	#selectionActive = false;
 	#selectionAnchor: { col: number; row: number } | null = null; // Start of selection (content coords)
 	#selectionEnd: { col: number; row: number } | null = null; // End of selection (content coords)
+	#selectionScrollTimer?: Timer; // Auto-scroll timer during edge drag
 
 	// Overlay stack for modal components rendered on top of base content
 	overlayStack: {
@@ -615,12 +616,39 @@ export class TUI extends Container {
 				break;
 			case "drag":
 				if (this.#selectionActive && this.#selectionAnchor) {
-					this.#renderSelection(false); // Clear previous highlight
+					this.#renderSelection(false);
 					this.#selectionEnd = { col: contentCol, row: contentRow };
-					this.#renderSelection(true); // Draw new highlight
+					this.#renderSelection(true);
+
+					// Auto-scroll when dragging at viewport edges
+					const scrollDir = event.row <= 1 ? 1 : event.row >= height ? -1 : 0;
+					if (scrollDir !== 0 && !this.#selectionScrollTimer) {
+						this.#selectionScrollTimer = setInterval(() => {
+							if (!this.#selectionActive) {
+								clearInterval(this.#selectionScrollTimer);
+								this.#selectionScrollTimer = undefined;
+								return;
+							}
+							this.#renderSelection(false);
+							this.#nativeScroll(scrollDir * this.#scrollLines);
+							// Update selection end to follow scroll
+							const cache = this.#fullRenderCache;
+							const vt = Math.max(0, cache.length - height - this.#scrollOffset);
+							const newRow = scrollDir > 0 ? vt : vt + height - 1;
+							this.#selectionEnd = { col: this.#selectionEnd!.col, row: newRow };
+							this.#renderSelection(true);
+						}, 80);
+					} else if (scrollDir === 0 && this.#selectionScrollTimer) {
+						clearInterval(this.#selectionScrollTimer);
+						this.#selectionScrollTimer = undefined;
+					}
 				}
 				break;
 			case "release":
+				if (this.#selectionScrollTimer) {
+					clearInterval(this.#selectionScrollTimer);
+					this.#selectionScrollTimer = undefined;
+				}
 				if (this.#selectionActive && this.#selectionAnchor && this.#selectionEnd) {
 					this.#copySelectionToClipboard();
 					setTimeout(() => this.#clearSelection(), 150);
@@ -630,6 +658,10 @@ export class TUI extends Container {
 	}
 
 	#clearSelection(): void {
+		if (this.#selectionScrollTimer) {
+			clearInterval(this.#selectionScrollTimer);
+			this.#selectionScrollTimer = undefined;
+		}
 		if (!this.#selectionActive) return;
 		this.#renderSelection(false);
 		this.#selectionActive = false;
