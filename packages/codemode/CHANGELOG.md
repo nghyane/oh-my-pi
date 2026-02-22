@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [12.18.4] - 2026-02-22
+
 ### Added
 
 - Initial release of Code Mode package
