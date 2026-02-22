@@ -1,4 +1,4 @@
-import type { Terminal } from "@nghyane/pi-tui/terminal";
+import type { MouseEvent, Terminal } from "@nghyane/pi-tui/terminal";
 import type { Terminal as XtermTerminalType } from "@xterm/headless";
 import xterm from "@xterm/headless";
 
@@ -34,6 +34,10 @@ export class VirtualTerminal implements Terminal {
 		this.resizeHandler = onResize;
 		// Enable bracketed paste mode for consistency with ProcessTerminal
 		this.xterm.write("\x1b[?2004h");
+	}
+
+	onMouse(_handler: (event: MouseEvent) => void): void {
+		// No-op for virtual terminal
 	}
 
 	async drainInput(_maxMs?: number, _idleMs?: number): Promise<void> {

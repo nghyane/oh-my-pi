@@ -4,6 +4,15 @@ import { $env, logger } from "@nghyane/pi-utils";
 import { setKittyProtocolActive } from "./keys";
 import { StdinBuffer } from "./stdin-buffer";
 
+export type MouseEventType = "press" | "drag" | "release" | "scroll";
+
+export interface MouseEvent {
+	type: MouseEventType;
+	button: number;
+	col: number;
+	row: number;
+}
+
 // Internal scroll sequences emitted by mouse wheel events
 export const SCROLL_UP = "\x1b[<64~";
 export const SCROLL_DOWN = "\x1b[<65~";
@@ -34,7 +43,7 @@ export function emergencyTerminalRestore(): void {
 			// This avoids writing escape sequences for non-TUI commands (grep, commit, etc.)
 			process.stdout.write(
 				"\x1b[?2004l" + // Disable bracketed paste
-					"\x1b[?1006l\x1b[?1000l" + // Disable mouse tracking
+					"\x1b[?1006l\x1b[?1002l" + // Disable mouse tracking
 					"\x1b[<u" + // Pop kitty keyboard protocol
 					"\x1b[?1049l" + // Leave alternate screen buffer
 					"\x1b[?25h", // Show cursor
@@ -50,6 +59,9 @@ export function emergencyTerminalRestore(): void {
 export interface Terminal {
 	// Start the terminal with input and resize handlers
 	start(onInput: (data: string) => void, onResize: () => void): void;
+
+	// Set mouse event handler
+	onMouse(handler: (event: MouseEvent) => void): void;
 
 	// Stop the terminal and restore state
 	stop(): void;
@@ -95,6 +107,7 @@ export class ProcessTerminal implements Terminal {
 	#wasRaw = false;
 	#inputHandler?: (data: string) => void;
 	#resizeHandler?: () => void;
+	#mouseHandler?: (event: MouseEvent) => void;
 	#kittyProtocolActive = false;
 	#stdinBuffer?: StdinBuffer;
 	#stdinDataHandler?: (data: string) => void;
@@ -104,6 +117,10 @@ export class ProcessTerminal implements Terminal {
 
 	get kittyProtocolActive(): boolean {
 		return this.#kittyProtocolActive;
+	}
+
+	onMouse(handler: (event: MouseEvent) => void): void {
+		this.#mouseHandler = handler;
 	}
 
 	start(onInput: (data: string) => void, onResize: () => void): void {
@@ -125,8 +142,8 @@ export class ProcessTerminal implements Terminal {
 		// Enter alternate screen buffer — keeps TUI output out of scrollback
 		this.#safeWrite("\x1b[?1049h");
 
-		// Enable mouse tracking (button events + SGR encoding) for scroll wheel support
-		this.#safeWrite("\x1b[?1000h\x1b[?1006h");
+		// Enable mouse tracking (button-motion + SGR encoding) for scroll and selection
+		this.#safeWrite("\x1b[?1002h\x1b[?1006h");
 
 		// Enable bracketed paste mode - terminal will wrap pastes in \x1b[200~ ... \x1b[201~
 		this.#safeWrite("\x1b[?2004h");
@@ -216,7 +233,7 @@ export class ProcessTerminal implements Terminal {
 		const kittyResponsePattern = /^\x1b\[\?(\d+)u$/;
 
 		// SGR mouse sequence pattern: \x1b[<button;col;rowM or \x1b[<button;col;rowm
-		const sgrMousePattern = /^\x1b\[<(\d+);\d+;\d+[Mm]$/;
+		const sgrMousePattern = /^\x1b\[<(\d+);(\d+);(\d+)([Mm])$/;
 
 		// Forward individual sequences to the input handler
 		this.#stdinBuffer.on("data", (sequence: string) => {
@@ -236,15 +253,28 @@ export class ProcessTerminal implements Terminal {
 				}
 			}
 
-			// Handle mouse events — emit internal scroll sequences, drop the rest
+			// Handle mouse events
 			const sgrMatch = sequence.match(sgrMousePattern);
 			if (sgrMatch) {
-				const button = Number.parseInt(sgrMatch[1], 10);
-				// SGR button 64 = scroll up, 65 = scroll down → internal sequences
-				if ((button === 64 || button === 65) && this.#inputHandler) {
-					this.#inputHandler(button === 64 ? SCROLL_UP : SCROLL_DOWN);
+				const rawButton = Number.parseInt(sgrMatch[1], 10);
+				const col = Number.parseInt(sgrMatch[2], 10);
+				const row = Number.parseInt(sgrMatch[3], 10);
+				const isRelease = sgrMatch[4] === "m";
+
+				// Scroll wheel: button 64 = up, 65 = down
+				if ((rawButton === 64 || rawButton === 65) && this.#inputHandler) {
+					this.#inputHandler(rawButton === 64 ? SCROLL_UP : SCROLL_DOWN);
+					return;
 				}
-				return; // Drop all other mouse events
+
+				// Emit structured mouse event
+				if (this.#mouseHandler) {
+					const button = rawButton & 0x03; // low 2 bits = button number
+					const isDrag = (rawButton & 0x20) !== 0; // bit 5 = motion
+					const type: MouseEventType = isRelease ? "release" : isDrag ? "drag" : "press";
+					this.#mouseHandler({ type, button, col, row });
+				}
+				return; // Don't forward mouse events as keyboard input
 			}
 			// Drop legacy X10 mouse sequences
 			if (sequence.startsWith("\x1b[M") && sequence.length === 6) {
@@ -328,7 +358,7 @@ export class ProcessTerminal implements Terminal {
 		this.#safeWrite("\x1b[?2004l");
 
 		// Disable mouse tracking
-		this.#safeWrite("\x1b[?1006l\x1b[?1000l");
+		this.#safeWrite("\x1b[?1006l\x1b[?1002l");
 
 		// Disable Kitty keyboard protocol if not already done by drainInput()
 		if (this.#kittyProtocolActive) {

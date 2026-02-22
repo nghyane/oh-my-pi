@@ -5,7 +5,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { getCrashLogPath, getDebugLogPath } from "@nghyane/pi-utils/dirs";
 import { isKeyRelease, matchesKey } from "./keys";
-import { SCROLL_DOWN, SCROLL_UP, type Terminal } from "./terminal";
+import { type MouseEvent, SCROLL_DOWN, SCROLL_UP, type Terminal } from "./terminal";
 import { setCellDimensions, TERMINAL } from "./terminal-capabilities";
 import { extractSegments, sliceByColumn, sliceWithWidth, visibleWidth } from "./utils";
 
@@ -226,6 +226,11 @@ export class TUI extends Container {
 	#scrollFlushScheduled = false; // Whether a flush is scheduled on next tick
 	#fullRenderCache: string[] = []; // Cached full render output for native scroll
 
+	// Selection state for mouse text selection
+	#selectionActive = false;
+	#selectionAnchor: { col: number; row: number } | null = null; // Start of selection (content coords)
+	#selectionEnd: { col: number; row: number } | null = null; // End of selection (content coords)
+
 	// Overlay stack for modal components rendered on top of base content
 	overlayStack: {
 		component: Component;
@@ -383,6 +388,7 @@ export class TUI extends Container {
 			data => this.#handleInput(data),
 			() => this.requestRender(),
 		);
+		this.terminal.onMouse(event => this.#handleMouse(event));
 		this.terminal.hideCursor();
 		this.#queryCellSize();
 		this.requestRender();
@@ -509,6 +515,8 @@ export class TUI extends Container {
 	}
 
 	#handleInput(data: string): void {
+		// Clear any active selection on keyboard input
+		if (this.#selectionActive) this.#clearSelection();
 		// Handle scroll wheel events — batch and flush on next tick
 		if (data === SCROLL_UP || data === SCROLL_DOWN) {
 			this.#scrollPending += data === SCROLL_UP ? this.#scrollLines : -this.#scrollLines;
@@ -585,6 +593,130 @@ export class TUI extends Container {
 			this.#focusedComponent.handleInput(data);
 			this.requestRender();
 		}
+	}
+
+	#handleMouse(event: MouseEvent): void {
+		const height = this.terminal.rows;
+		const cache = this.#fullRenderCache;
+		if (cache.length === 0) return;
+
+		const viewportTop = Math.max(0, cache.length - height - this.#scrollOffset);
+		const contentRow = viewportTop + event.row - 1;
+		const contentCol = event.col - 1;
+
+		switch (event.type) {
+			case "press":
+				if (event.button === 0) {
+					if (this.#selectionActive) this.#renderSelection(false);
+					this.#selectionActive = true;
+					this.#selectionAnchor = { col: contentCol, row: contentRow };
+					this.#selectionEnd = { col: contentCol, row: contentRow };
+				}
+				break;
+			case "drag":
+				if (this.#selectionActive && this.#selectionAnchor) {
+					this.#renderSelection(false); // Clear previous highlight
+					this.#selectionEnd = { col: contentCol, row: contentRow };
+					this.#renderSelection(true); // Draw new highlight
+				}
+				break;
+			case "release":
+				if (this.#selectionActive && this.#selectionAnchor && this.#selectionEnd) {
+					this.#copySelectionToClipboard();
+					setTimeout(() => this.#clearSelection(), 150);
+				}
+				break;
+		}
+	}
+
+	#clearSelection(): void {
+		if (!this.#selectionActive) return;
+		this.#renderSelection(false);
+		this.#selectionActive = false;
+		this.#selectionAnchor = null;
+		this.#selectionEnd = null;
+	}
+
+	#getSelectionRange(): { startRow: number; startCol: number; endRow: number; endCol: number } | null {
+		if (!this.#selectionAnchor || !this.#selectionEnd) return null;
+		const a = this.#selectionAnchor;
+		const b = this.#selectionEnd;
+		if (a.row < b.row || (a.row === b.row && a.col <= b.col)) {
+			return { startRow: a.row, startCol: a.col, endRow: b.row, endCol: b.col };
+		}
+		return { startRow: b.row, startCol: b.col, endRow: a.row, endCol: a.col };
+	}
+
+	/** Render or clear selection directly on terminal — no component re-render */
+	#renderSelection(highlight: boolean): void {
+		const range = this.#getSelectionRange();
+		if (!range) return;
+		const { startRow, startCol, endRow, endCol } = range;
+		if (startRow === endRow && startCol === endCol) return;
+
+		const cache = this.#fullRenderCache;
+		const height = this.terminal.rows;
+		const width = this.terminal.columns;
+		const viewportTop = Math.max(0, cache.length - height - this.#scrollOffset);
+
+		let buffer = "\x1b[?2026h\x1b7"; // Synchronized output + save cursor
+
+		for (let row = startRow; row <= endRow && row < cache.length; row++) {
+			const screenRow = row - viewportTop;
+			if (screenRow < 0 || screenRow >= height) continue;
+
+			const line = cache[row];
+			if (TERMINAL.isImageLine(line)) continue;
+
+			const colStart = row === startRow ? startCol : 0;
+			const colEnd = row === endRow ? endCol : width;
+			if (colStart >= colEnd) continue;
+
+			// Restore original line first
+			buffer += `\x1b[${screenRow + 1};1H\x1b[2K${line}`;
+
+			if (highlight) {
+				// Strip ANSI to get plain text, then overlay with reverse video
+				const plain = line.replace(/\x1b\[[^m]*m|\x1b\][^\x07]*\x07|\x1b_[^\x07]*\x07/g, "");
+				const selectedPlain = plain.slice(colStart, colEnd);
+				if (selectedPlain.length > 0) {
+					buffer += `\x1b[${screenRow + 1};${colStart + 1}H\x1b[7m${selectedPlain}\x1b[27m`;
+				}
+			}
+		}
+
+		buffer += "\x1b8\x1b[?2026l"; // Restore cursor + end synchronized output
+		this.terminal.write(buffer);
+	}
+
+	#copySelectionToClipboard(): void {
+		const range = this.#getSelectionRange();
+		if (!range) return;
+		const { startRow, startCol, endRow, endCol } = range;
+		if (startRow === endRow && startCol === endCol) return;
+
+		const cache = this.#fullRenderCache;
+		if (cache.length === 0) return;
+
+		const textLines: string[] = [];
+		for (let row = startRow; row <= endRow && row < cache.length; row++) {
+			if (row < 0) continue;
+			const line = cache[row];
+			if (TERMINAL.isImageLine(line)) continue;
+			const lineStart = row === startRow ? startCol : 0;
+			const lineEnd = row === endRow ? endCol : visibleWidth(line);
+			const sliced = sliceByColumn(line, lineStart, lineEnd - lineStart, true);
+			// Strip ANSI from the sliced segment
+			const plain = sliced.replace(/\x1b\[[^a-zA-Z]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b_[^\x07]*\x07/g, "");
+			textLines.push(plain);
+		}
+
+		const text = textLines.join("\n");
+		if (text.length === 0) return;
+
+		const b64 = Buffer.from(text).toString("base64");
+		this.terminal.write(`\x1b]52;c;${b64}\x07`);
+		TERMINAL.sendNotification("Copied to clipboard");
 	}
 
 	#parseCellSizeResponse(): string {
@@ -975,13 +1107,25 @@ export class TUI extends Container {
 			}
 			const maxScroll = Math.max(0, newLines.length - height);
 			this.#scrollOffset = Math.min(this.#scrollOffset, maxScroll);
-			// Redraw visible viewport from updated cache
+
+			// Check if the visible viewport actually changed
 			const viewportStart = newLines.length - height - this.#scrollOffset;
 			const visibleLines = newLines.slice(viewportStart, viewportStart + height);
-			let buffer = "\x1b[?2026h\x1b[H";
+			const viewportChanged =
+				visibleLines.length !== this.#previousLines.length ||
+				visibleLines.some((line, i) => line !== this.#previousLines[i]);
+
+			if (!viewportChanged) {
+				// Viewport content unchanged — skip render entirely
+				this.#previousWidth = width;
+				return;
+			}
+
+			// Only redraw lines that actually changed
+			let buffer = "\x1b[?2026h";
 			for (let i = 0; i < visibleLines.length; i++) {
-				if (i > 0) buffer += "\r\n";
-				buffer += `\x1b[2K${visibleLines[i]}`;
+				if (i < this.#previousLines.length && visibleLines[i] === this.#previousLines[i]) continue;
+				buffer += `\x1b[${i + 1};1H\x1b[2K${visibleLines[i]}`;
 			}
 			buffer += "\x1b[?25l\x1b[?2026l";
 			this.terminal.write(buffer);
